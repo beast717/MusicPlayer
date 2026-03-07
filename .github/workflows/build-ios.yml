@@ -31,25 +31,32 @@ jobs:
 
       - name: Patch expo-modules-core for Swift concurrency
         run: |
-          # Patch ExpoModulesCore podspec to disable strict Swift 6 concurrency
-          # Add -Xfrontend flags to suppress all concurrency errors
-          sed -i '' "s|'SWIFT_COMPILATION_MODE' => 'wholemodule'|'SWIFT_COMPILATION_MODE' => 'wholemodule', 'SWIFT_STRICT_CONCURRENCY' => 'minimal', 'OTHER_SWIFT_FLAGS' => '\$(inherited) -Xfrontend -strict-concurrency=minimal -Xfrontend -disable-dynamic-actor-isolation'|" \
-            node_modules/expo-modules-core/ExpoModulesCore.podspec
+          EMC="node_modules/expo-modules-core"
+          
+          # 1. Downgrade from Swift 6 to Swift 5.10 (avoids all strict concurrency errors)
+          sed -i '' "s|s.swift_version  = '6.0'|s.swift_version  = '5.10'|" "$EMC/ExpoModulesCore.podspec"
+          
+          # 2. Fix Swift 6-only syntax: @MainActor in conformance clause
+          # SwiftUIHostingView.swift line 45: remove @MainActor from protocol conformance
+          sed -i '' 's|, @MainActor AnyExpoSwiftUIHostingView|, AnyExpoSwiftUIHostingView|' \
+            "$EMC/ios/Core/Views/SwiftUI/SwiftUIHostingView.swift"
+          
+          # ViewDefinition.swift line 121: remove @MainActor from extension conformance
+          sed -i '' 's|extension UIView: @MainActor AnyArgument|extension UIView: AnyArgument|' \
+            "$EMC/ios/Core/Views/ViewDefinition.swift"
+          
+          echo "✅ Patched expo-modules-core: Swift 6.0 → 5.10 + removed @MainActor conformances"
 
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --clean
 
       - name: Patch Podfile for Swift concurrency
         run: |
-          # Inject Swift concurrency fix into EXISTING post_install block
+          # Keep minimal concurrency in post_install as extra safety
           sed -i '' '/post_install do |installer|/a\
-            installer.pods_project.targets.each do |target|\
-              target.build_configurations.each do |config|\
-                config.build_settings["SWIFT_STRICT_CONCURRENCY"] = "minimal"\
-                existing = config.build_settings["OTHER_SWIFT_FLAGS"] || "$(inherited)"\
-                unless existing.include?("strict-concurrency")\
-                  config.build_settings["OTHER_SWIFT_FLAGS"] = "#{existing} -Xfrontend -strict-concurrency=minimal"\
-                end\
+            installer.pods_project.targets.each do |target|\\
+              target.build_configurations.each do |config|\\
+                config.build_settings["SWIFT_STRICT_CONCURRENCY"] = "minimal"\\
               end\
             end
           ' ios/Podfile
@@ -65,7 +72,7 @@ jobs:
           xcodebuild \
             -workspace MusicPlayer.xcworkspace \
             -scheme MusicPlayer \
-            -configuration Debug \
+            -configuration Release \
             -sdk iphoneos \
             -destination 'generic/platform=iOS' \
             -derivedDataPath build \
