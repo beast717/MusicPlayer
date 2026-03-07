@@ -34,22 +34,18 @@ jobs:
 
       - name: Patch Podfile for Swift concurrency
         run: |
-          # Inject Swift strict concurrency fix into the Podfile's post_install
-          # This ensures ALL pod targets use minimal concurrency checking
-          cat >> ios/Podfile << 'PATCH'
-
-          post_install do |installer|
-            installer.pods_project.targets.each do |target|
-              target.build_configurations.each do |config|
-                config.build_settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
-                # Ensure we stay in Swift 5 language mode
-                if config.build_settings['SWIFT_VERSION'] == '6.0'
-                  config.build_settings['SWIFT_VERSION'] = '5.0'
-                end
-              end
+          # Inject Swift concurrency fix into EXISTING post_install block
+          # Find the post_install line and add our code right after it
+          sed -i '' '/post_install do |installer|/a\
+            installer.pods_project.targets.each do |target|\
+              target.build_configurations.each do |config|\
+                config.build_settings["SWIFT_STRICT_CONCURRENCY"] = "minimal"\
+                if config.build_settings["SWIFT_VERSION"] == "6.0"\
+                  config.build_settings["SWIFT_VERSION"] = "5.0"\
+                end\
+              end\
             end
-          end
-          PATCH
+          ' ios/Podfile
 
       - name: Install CocoaPods
         working-directory: ios
