@@ -41,7 +41,7 @@ jobs:
               target.build_configurations.each do |config|\
                 config.build_settings["SWIFT_STRICT_CONCURRENCY"] = "minimal"\
                 if config.build_settings["SWIFT_VERSION"] == "6.0"\
-                  config.build_settings["SWIFT_VERSION"] = "5.0"\
+                  config.build_settings["SWIFT_VERSION"] = "5.10"\
                 end\
               end\
             end
