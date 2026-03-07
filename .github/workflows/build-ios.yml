@@ -29,17 +29,26 @@ jobs:
           # Remove expo-dev-client to avoid simulator runtime issues
           npm uninstall expo-dev-client
 
+      - name: Patch expo-modules-core for Swift concurrency
+        run: |
+          # Patch ExpoModulesCore podspec to disable strict Swift concurrency
+          sed -i '' "s|'SWIFT_COMPILATION_MODE' => 'wholemodule'|'SWIFT_COMPILATION_MODE' => 'wholemodule', 'SWIFT_STRICT_CONCURRENCY' => 'minimal', 'OTHER_SWIFT_FLAGS' => '\$(inherited) -Xfrontend -strict-concurrency=minimal'|" \
+            node_modules/expo-modules-core/ExpoModulesCore.podspec
+
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --clean
 
       - name: Patch Podfile for Swift concurrency
         run: |
           # Inject Swift concurrency fix into EXISTING post_install block
-          # Find the post_install line and add our code right after it
           sed -i '' '/post_install do |installer|/a\
             installer.pods_project.targets.each do |target|\
               target.build_configurations.each do |config|\
                 config.build_settings["SWIFT_STRICT_CONCURRENCY"] = "minimal"\
+                existing = config.build_settings["OTHER_SWIFT_FLAGS"] || "$(inherited)"\
+                unless existing.include?("strict-concurrency")\
+                  config.build_settings["OTHER_SWIFT_FLAGS"] = "#{existing} -Xfrontend -strict-concurrency=minimal"\
+                end\
               end\
             end
           ' ios/Podfile
