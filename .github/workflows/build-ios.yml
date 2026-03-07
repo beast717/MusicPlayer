@@ -13,15 +13,12 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Select Xcode version
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
-
-      - name: Install iOS platform
         run: |
-          # macOS-15 runners may not have iOS platform pre-installed
-          xcodebuild -downloadPlatform iOS || echo "Platform may already be installed"
-          # Verify SDK is available
-          xcodebuild -showsdks | grep iphoneos
-        timeout-minutes: 20
+          sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+          # Run first launch tasks so Xcode registers all platforms
+          xcodebuild -runFirstLaunch 2>/dev/null || true
+          echo "Available iOS SDKs:"
+          xcodebuild -showsdks 2>/dev/null | grep -i iphone || true
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -66,13 +63,15 @@ jobs:
         working-directory: ios
         run: |
           # Build the .app for device (arm64) without code signing
+          # Use -arch arm64 instead of -destination to avoid platform detection issues
           xcodebuild \
             -workspace MusicPlayer.xcworkspace \
             -scheme MusicPlayer \
             -configuration Release \
             -sdk iphoneos \
-            -destination 'generic/platform=iOS' \
+            -arch arm64 \
             -derivedDataPath build \
+            COMPILER_INDEX_STORE_ENABLE=NO \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY="" \
