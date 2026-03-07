@@ -15,6 +15,14 @@ jobs:
       - name: Select Xcode version
         run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
 
+      - name: Install iOS platform
+        run: |
+          # macOS-15 runners may not have iOS platform pre-installed
+          xcodebuild -downloadPlatform iOS || echo "Platform may already be installed"
+          # Verify SDK is available
+          xcodebuild -showsdks | grep iphoneos
+        timeout-minutes: 20
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
