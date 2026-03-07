@@ -13,7 +13,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Select Xcode version
-        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+        run: sudo xcode-select -s /Applications/Xcode_16.0.app/Contents/Developer
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -54,9 +54,8 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
-            COMPILER_INDEX_STORE_ENABLE=NO \
-            SWIFT_STRICT_CONCURRENCY=minimal \
-            SWIFT_VERSION=5.0
+            COMPILER_INDEX_STORE_ENABLE=NO 
+            SWIFT_STRICT_CONCURRENCY=minimal
 
       - name: Package IPA
         run: |
