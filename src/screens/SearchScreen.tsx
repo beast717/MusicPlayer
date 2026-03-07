@@ -7,6 +7,7 @@ import {
   StyleSheet,
   ActivityIndicator,
   Keyboard,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Clock, X, TrendingUp } from 'lucide-react-native';
@@ -82,6 +83,16 @@ export function SearchScreen() {
       setLoadingTrackId(item.videoId);
       await playTrack(track);
       setLoadingTrackId(null);
+
+      // Check if playback failed and show error to the user
+      const playerError = usePlayerStore.getState().error;
+      if (playerError) {
+        Alert.alert(
+          'Playback Error',
+          playerError,
+          [{ text: 'OK', onPress: () => usePlayerStore.getState().setError(null) }]
+        );
+      }
     },
     [playTrack]
   );

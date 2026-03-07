@@ -211,16 +211,34 @@ async function getStreamFromWatchPage(videoId: string): Promise<AudioStream[]> {
 
   const adaptiveFormats =
     playerResponse?.streamingData?.adaptiveFormats || [];
+  const regularFormats =
+    playerResponse?.streamingData?.formats || [];
+  const allFormats = [...adaptiveFormats, ...regularFormats];
 
-  const audioStreams: AudioStream[] = adaptiveFormats
+  const audioStreams: AudioStream[] = allFormats
     .filter((f: any) => (f.mimeType || '').startsWith('audio/'))
-    .map((f: any) => ({
-      url: f.url || '',
-      mimeType: (f.mimeType || '').split(';')[0],
-      bitrate: f.bitrate || 0,
-      quality: f.audioQuality || f.quality || '',
-      codec: f.mimeType?.match(/codecs="([^"]+)"/)?.[1] || '',
-    }))
+    .map((f: any) => {
+      // Some streams have a direct URL, others use signatureCipher
+      let streamUrl = f.url || '';
+
+      // Try to extract URL from signatureCipher (works for non-throttled streams)
+      if (!streamUrl && f.signatureCipher) {
+        try {
+          const params = new URLSearchParams(f.signatureCipher);
+          streamUrl = params.get('url') || '';
+          // Note: ciphered streams need signature decoding, which we can't do
+          // easily client-side. The Piped API fallback handles these.
+        } catch {}
+      }
+
+      return {
+        url: streamUrl,
+        mimeType: (f.mimeType || '').split(';')[0],
+        bitrate: f.bitrate || 0,
+        quality: f.audioQuality || f.quality || '',
+        codec: f.mimeType?.match(/codecs="([^"]+)"/)?.[1] || '',
+      };
+    })
     .filter((s: AudioStream) => s.url !== '');
 
   return audioStreams;
@@ -233,6 +251,7 @@ async function getStreamFromInnerTube(
   videoId: string
 ): Promise<AudioStream[]> {
   const clients = [
+    { clientName: 'ANDROID', clientVersion: '19.09.37', androidSdkVersion: 30 },
     { clientName: 'TVHTML5_SIMPLY_EMBEDDED_PLAYER', clientVersion: '2.0' },
     { clientName: 'WEB_EMBEDDED_PLAYER', clientVersion: '1.0' },
   ];
@@ -279,6 +298,51 @@ async function getStreamFromInnerTube(
   return [];
 }
 
+// ─── Piped API Fallback ─────────────────────────────────────────────
+
+const PIPED_API_INSTANCES = [
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.adminforge.de',
+  'https://pipedapi.in.projectsegfau.lt',
+];
+
+async function getStreamFromPipedAPI(
+  videoId: string
+): Promise<AudioStream[]> {
+  for (const instance of PIPED_API_INSTANCES) {
+    try {
+      const response = await fetchWithTimeout(
+        `${instance}/streams/${videoId}`,
+        {
+          headers: {
+            Accept: 'application/json',
+          },
+        },
+        12000
+      );
+
+      if (!response.ok) continue;
+
+      const data = await response.json();
+      const audioStreams: AudioStream[] = (data.audioStreams || [])
+        .filter((s: any) => s.url && s.url.length > 0)
+        .map((s: any) => ({
+          url: s.url,
+          mimeType: (s.mimeType || s.format || 'audio/mp4').split(';')[0],
+          bitrate: s.bitrate || 0,
+          quality: s.quality || '',
+          codec: s.codec || '',
+        }));
+
+      if (audioStreams.length > 0) return audioStreams;
+    } catch {
+      continue;
+    }
+  }
+
+  return [];
+}
+
 export async function getAudioStreamUrl(
   videoId: string,
   quality: AudioQuality = 'high'
@@ -290,7 +354,20 @@ export async function getAudioStreamUrl(
   const targetBitrate = AUDIO_QUALITY_BITRATE[quality];
   const errors: string[] = [];
 
-  // Method 1: Scrape watch page (most reliable)
+  // Method 1: Piped API (most reliable – deciphers signatures server-side)
+  try {
+    const streams = await getStreamFromPipedAPI(videoId);
+    const streamUrl = pickBestAudioStream(streams, targetBitrate);
+    if (streamUrl) {
+      cacheStreamUrl(videoId, streamUrl);
+      return streamUrl;
+    }
+    errors.push('Piped API: no suitable audio stream found');
+  } catch (err: any) {
+    errors.push(`Piped API: ${err.message}`);
+  }
+
+  // Method 2: Scrape YouTube watch page
   try {
     const streams = await getStreamFromWatchPage(videoId);
     const streamUrl = pickBestAudioStream(streams, targetBitrate);
@@ -303,7 +380,7 @@ export async function getAudioStreamUrl(
     errors.push(`Watch page: ${err.message}`);
   }
 
-  // Method 2: InnerTube player API with alternative clients
+  // Method 3: InnerTube player API with alternative clients
   try {
     const streams = await getStreamFromInnerTube(videoId);
     const streamUrl = pickBestAudioStream(streams, targetBitrate);
