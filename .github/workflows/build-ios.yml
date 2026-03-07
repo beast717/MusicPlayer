@@ -24,6 +24,11 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Remove dev-client for production build
+        run: |
+          # Remove expo-dev-client to avoid simulator runtime issues
+          npm uninstall expo-dev-client
+
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --clean
 
@@ -40,6 +45,7 @@ jobs:
             -scheme MusicPlayer \
             -configuration Release \
             -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
             -derivedDataPath build \
             CODE_SIGNING_ALLOWED=NO \
             CODE_SIGNING_REQUIRED=NO \
@@ -48,7 +54,7 @@ jobs:
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE="" \
             PROVISIONING_PROFILE_SPECIFIER="" \
-            -quiet
+            COMPILER_INDEX_STORE_ENABLE=NO
 
       - name: Package IPA
         run: |
