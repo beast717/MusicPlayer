@@ -14,7 +14,15 @@ jobs:
 
       - name: Select Xcode version
         run: |
-          sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
+          # Dynamically pick the latest Xcode 16.x installed on the runner
+          XCODE_PATH=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -1)
+          if [ -z "$XCODE_PATH" ]; then
+            echo "❌ No Xcode 16.x found on this runner"
+            ls /Applications/ | grep -i xcode || true
+            exit 1
+          fi
+          echo "Using Xcode: $XCODE_PATH"
+          sudo xcode-select -s "$XCODE_PATH/Contents/Developer"
           # Run first launch tasks so Xcode registers all platforms
           xcodebuild -runFirstLaunch 2>/dev/null || true
           echo "Available iOS SDKs:"
@@ -28,11 +36,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Remove dev-client for production build
-        run: |
-          # Remove expo-dev-client to avoid simulator runtime issues
-          npm uninstall expo-dev-client
 
       - name: Patch expo-modules-core for Swift concurrency
         run: |
@@ -50,6 +53,11 @@ jobs:
           sed -i '' 's|extension UIView: @MainActor AnyArgument|extension UIView: AnyArgument|' \
             "$EMC/ios/Core/Views/ViewDefinition.swift"
           
+          # Validate patches actually applied
+          if ! grep -q "5.10" "$EMC/ExpoModulesCore.podspec"; then
+            echo "❌ Swift version patch did not apply — podspec may have changed"
+            exit 1
+          fi
           echo "✅ Patched expo-modules-core: Swift 6.0 → 5.10 + removed @MainActor conformances"
 
       - name: Generate native iOS project
