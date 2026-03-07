@@ -50,17 +50,6 @@ jobs:
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --clean
 
-      - name: Patch Podfile for Swift concurrency
-        run: |
-          # Keep minimal concurrency in post_install as extra safety
-          sed -i '' '/post_install do |installer|/a\
-            installer.pods_project.targets.each do |target|\\
-              target.build_configurations.each do |config|\\
-                config.build_settings["SWIFT_STRICT_CONCURRENCY"] = "minimal"\\
-              end\
-            end
-          ' ios/Podfile
-
       - name: Install CocoaPods
         working-directory: ios
         run: pod install
