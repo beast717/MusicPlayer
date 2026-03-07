@@ -4,8 +4,18 @@ import {
   INVIDIOUS_INSTANCES,
   STREAM_URL_TTL,
   AUDIO_QUALITY_BITRATE,
+  INSTANCE_TIMEOUT,
   AudioQuality,
 } from '../utils/constants';
+
+function fetchWithTimeout(url: string, timeoutMs: number = INSTANCE_TIMEOUT): Promise<Response> {
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), timeoutMs);
+  return fetch(url, {
+    headers: { 'Accept': 'application/json' },
+    signal: controller.signal,
+  }).finally(() => clearTimeout(id));
+}
 import { mmkvStorage } from './storage';
 
 // ─── YouTube Search via Piped API ────────────────────────────────────
@@ -37,9 +47,7 @@ export async function searchYouTube(
   for (const instance of PIPED_INSTANCES) {
     try {
       const url = `${instance}/search?q=${encodeURIComponent(query)}&filter=${filter}`;
-      const response = await fetch(url, {
-        headers: { 'Accept': 'application/json' },
-      });
+      const response = await fetchWithTimeout(url);
 
       if (!response.ok) continue;
 
@@ -67,9 +75,7 @@ export async function searchYouTube(
   for (const instance of INVIDIOUS_INSTANCES) {
     try {
       const url = `${instance}/api/v1/search?q=${encodeURIComponent(query)}&type=video`;
-      const response = await fetch(url, {
-        headers: { 'Accept': 'application/json' },
-      });
+      const response = await fetchWithTimeout(url);
 
       if (!response.ok) continue;
 
@@ -137,9 +143,7 @@ export async function getAudioStreamUrl(
   for (const instance of PIPED_INSTANCES) {
     try {
       const url = `${instance}/streams/${videoId}`;
-      const response = await fetch(url, {
-        headers: { 'Accept': 'application/json' },
-      });
+      const response = await fetchWithTimeout(url);
 
       if (!response.ok) continue;
 
@@ -168,9 +172,7 @@ export async function getAudioStreamUrl(
   for (const instance of INVIDIOUS_INSTANCES) {
     try {
       const url = `${instance}/api/v1/videos/${videoId}`;
-      const response = await fetch(url, {
-        headers: { 'Accept': 'application/json' },
-      });
+      const response = await fetchWithTimeout(url);
 
       if (!response.ok) continue;
 
@@ -243,7 +245,7 @@ export async function getVideoDetails(videoId: string): Promise<{
 } | null> {
   for (const instance of PIPED_INSTANCES) {
     try {
-      const response = await fetch(`${instance}/streams/${videoId}`);
+      const response = await fetchWithTimeout(`${instance}/streams/${videoId}`);
       if (!response.ok) continue;
       const data = await response.json();
       return {

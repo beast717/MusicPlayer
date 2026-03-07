@@ -1,16 +1,16 @@
 // Piped API instances (fallbacks in case primary is down)
 export const PIPED_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://pipedapi.adminforge.de',
   'https://pipedapi.in.projectsegfau.lt',
 ];
 
 // Invidious instances (secondary fallback)
 export const INVIDIOUS_INSTANCES = [
-  'https://inv.tux.pizza',
   'https://invidious.snopyta.org',
-  'https://invidious.kavin.rocks',
+  'https://iv.ggtyler.dev',
 ];
+
+// Timeout per instance request (ms) — fail fast to reach next instance
+export const INSTANCE_TIMEOUT = 8000;
 
 // App constants
 export const MAX_SEARCH_HISTORY = 20;
