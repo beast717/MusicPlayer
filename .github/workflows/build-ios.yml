@@ -5,12 +5,15 @@ on:
 
 jobs:
   build-ios:
-    runs-on: macos-14 # Apple Silicon runner
+    runs-on: macos-15 # Has Xcode 16.x
     timeout-minutes: 60
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+
+      - name: Select Xcode version
+        run: sudo xcode-select -s /Applications/Xcode_16.2.app/Contents/Developer
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
