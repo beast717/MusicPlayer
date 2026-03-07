@@ -32,6 +32,25 @@ jobs:
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --clean
 
+      - name: Patch Podfile for Swift concurrency
+        run: |
+          # Inject Swift strict concurrency fix into the Podfile's post_install
+          # This ensures ALL pod targets use minimal concurrency checking
+          cat >> ios/Podfile << 'PATCH'
+
+          post_install do |installer|
+            installer.pods_project.targets.each do |target|
+              target.build_configurations.each do |config|
+                config.build_settings['SWIFT_STRICT_CONCURRENCY'] = 'minimal'
+                # Ensure we stay in Swift 5 language mode
+                if config.build_settings['SWIFT_VERSION'] == '6.0'
+                  config.build_settings['SWIFT_VERSION'] = '5.0'
+                end
+              end
+            end
+          end
+          PATCH
+
       - name: Install CocoaPods
         working-directory: ios
         run: pod install
@@ -53,9 +72,7 @@ jobs:
             CODE_SIGN_ENTITLEMENTS="" \
             DEVELOPMENT_TEAM="" \
             PROVISIONING_PROFILE="" \
-            PROVISIONING_PROFILE_SPECIFIER="" \
-            COMPILER_INDEX_STORE_ENABLE=NO 
-            SWIFT_STRICT_CONCURRENCY=minimal
+            PROVISIONING_PROFILE_SPECIFIER=""
 
       - name: Package IPA
         run: |
