@@ -1,22 +1,9 @@
-// Piped API instances (fallbacks in case primary is down)
-export const PIPED_INSTANCES = [
-  'https://pipedapi.in.projectsegfau.lt',
-];
-
-// Invidious instances (secondary fallback)
-export const INVIDIOUS_INSTANCES = [
-  'https://invidious.snopyta.org',
-  'https://iv.ggtyler.dev',
-];
-
-// Timeout per instance request (ms) — fail fast to reach next instance
-export const INSTANCE_TIMEOUT = 8000;
-
 // App constants
 export const MAX_SEARCH_HISTORY = 20;
 export const STREAM_URL_TTL = 4 * 60 * 60 * 1000; // 4 hours in ms
 export const SEARCH_DEBOUNCE_MS = 400;
 export const MAX_RECENT_TRACKS = 50;
+export const REQUEST_TIMEOUT = 12000; // 12s timeout per request
 
 // Audio quality preference enum
 export type AudioQuality = 'low' | 'medium' | 'high';
