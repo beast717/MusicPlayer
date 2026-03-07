@@ -1,0 +1,72 @@
+name: Build iOS IPA
+
+on:
+  workflow_dispatch: # Manual trigger only
+
+jobs:
+  build-ios:
+    runs-on: macos-14 # Apple Silicon runner
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate native iOS project
+        run: npx expo prebuild --platform ios --clean
+
+      - name: Install CocoaPods
+        working-directory: ios
+        run: pod install
+
+      - name: Build unsigned IPA
+        working-directory: ios
+        run: |
+          # Build the .app for device (arm64) without code signing
+          xcodebuild \
+            -workspace MusicPlayer.xcworkspace \
+            -scheme MusicPlayer \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGN_ENTITLEMENTS="" \
+            DEVELOPMENT_TEAM="" \
+            PROVISIONING_PROFILE="" \
+            PROVISIONING_PROFILE_SPECIFIER="" \
+            -quiet
+
+      - name: Package IPA
+        run: |
+          # Find the .app bundle
+          APP_PATH=$(find ios/build -name "MusicPlayer.app" -type d | head -1)
+          echo "Found app at: $APP_PATH"
+
+          # Create Payload directory structure for IPA
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+
+          # Create the IPA (it's just a zip)
+          zip -r MusicPlayer.ipa Payload
+          rm -rf Payload
+
+          echo "✅ IPA created: MusicPlayer.ipa"
+          ls -lh MusicPlayer.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: MusicPlayer-unsigned
+          path: MusicPlayer.ipa
+          retention-days: 30
