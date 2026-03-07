@@ -5,7 +5,6 @@ import {
   TouchableOpacity,
   Image,
   StyleSheet,
-  Dimensions,
 } from 'react-native';
 import {
   Play,
@@ -19,8 +18,6 @@ import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
 import { usePlayerStore } from '../stores/playerStore';
 import { useProgress } from 'react-native-track-player';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
 interface MiniPlayerProps {
   onPress: () => void;
 }
@@ -32,10 +29,7 @@ export function MiniPlayer({ onPress }: MiniPlayerProps) {
   const togglePlayPause = usePlayerStore((s) => s.togglePlayPause);
   const skipToNext = usePlayerStore((s) => s.skipToNext);
 
-  let progress = { position: 0, duration: 0 };
-  try {
-    progress = useProgress(1000);
-  } catch {}
+  const progress = useProgress(1000);
 
   const progressPercent =
     progress.duration > 0 ? progress.position / progress.duration : 0;
@@ -61,7 +55,7 @@ export function MiniPlayer({ onPress }: MiniPlayerProps) {
             styles.progressFill,
             {
               backgroundColor: theme.primary,
-              width: `${progressPercent * 100}%` as any,
+              width: `${progressPercent * 100}%`,
             },
           ]}
         />
@@ -72,7 +66,7 @@ export function MiniPlayer({ onPress }: MiniPlayerProps) {
           source={{
             uri: currentTrack.localThumbnailPath || currentTrack.thumbnailUrl,
           }}
-          style={[styles.artwork, { borderRadius: borderRadius.sm }]}
+          style={[styles.artwork, { borderRadius: borderRadius.sm, backgroundColor: theme.card }]}
         />
 
         <View style={styles.info}>
@@ -95,6 +89,8 @@ export function MiniPlayer({ onPress }: MiniPlayerProps) {
             onPress={togglePlayPause}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             style={styles.controlButton}
+            accessibilityRole="button"
+            accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
           >
             {isPlaying ? (
               <Pause size={22} color={theme.text} fill={theme.text} />
@@ -107,6 +103,8 @@ export function MiniPlayer({ onPress }: MiniPlayerProps) {
             onPress={skipToNext}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             style={styles.controlButton}
+            accessibilityRole="button"
+            accessibilityLabel="Skip to next track"
           >
             <SkipForward size={20} color={theme.text} fill={theme.text} />
           </TouchableOpacity>
@@ -139,7 +137,6 @@ const styles = StyleSheet.create({
   artwork: {
     width: 44,
     height: 44,
-    backgroundColor: '#333',
   },
   info: {
     flex: 1,

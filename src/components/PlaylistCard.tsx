@@ -19,12 +19,12 @@ interface PlaylistCardProps {
   size?: 'small' | 'medium' | 'large';
 }
 
-export function PlaylistCard({
+const PlaylistCardInner = ({
   playlist,
   onPress,
   onLongPress,
   size = 'medium',
-}: PlaylistCardProps) {
+}: PlaylistCardProps) => {
   const { theme } = useTheme();
 
   const cardSize = size === 'small' ? 130 : size === 'large' ? 200 : 160;
@@ -89,6 +89,8 @@ export function PlaylistCard({
     </TouchableOpacity>
   );
 }
+
+export const PlaylistCard = React.memo(PlaylistCardInner);
 
 const styles = StyleSheet.create({
   container: {

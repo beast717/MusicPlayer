@@ -42,6 +42,13 @@ export function SearchScreen() {
 
   const showHistory = isFocused && query.length === 0 && results.length === 0;
 
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, []);
+
   const handleQueryChange = useCallback(
     (text: string) => {
       setQuery(text);

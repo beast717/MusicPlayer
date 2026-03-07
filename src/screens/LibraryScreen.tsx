@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import {
   ChevronRight,
   Music,
 } from 'lucide-react-native';
-import { PlaylistCard } from '../components';
+import { PlaylistCard, TextInputModal } from '../components';
 import { useTheme } from '../theme';
 import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
@@ -35,25 +35,16 @@ export function LibraryScreen() {
   const [showCreateInput, setShowCreateInput] = useState(false);
 
   const handleCreatePlaylist = useCallback(() => {
-    Alert.prompt(
-      'New Playlist',
-      'Enter a name for your playlist',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Create',
-          onPress: (name?: string) => {
-            if (name?.trim()) {
-              createPlaylist(name.trim());
-            }
-          },
-        },
-      ],
-      'plain-text',
-      '',
-      'default'
-    );
-  }, [createPlaylist]);
+    setShowCreateInput(true);
+  }, []);
+
+  const handleCreateSubmit = useCallback(
+    (name: string) => {
+      createPlaylist(name);
+      setShowCreateInput(false);
+    },
+    [createPlaylist]
+  );
 
   const handleDeletePlaylist = useCallback(
     (id: string, name: string) => {
@@ -73,26 +64,29 @@ export function LibraryScreen() {
     [deletePlaylist]
   );
 
-  const sections = [
-    {
-      id: 'favorites',
-      icon: Heart,
-      iconColor: theme.accent,
-      iconBg: theme.accent + '20',
-      label: 'Liked Songs',
-      count: favorites.length,
-      onPress: () => navigation.navigate('Favorites'),
-    },
-    {
-      id: 'downloads',
-      icon: Download,
-      iconColor: theme.success,
-      iconBg: theme.success + '20',
-      label: 'Downloads',
-      count: downloadedTracks.length,
-      onPress: () => navigation.navigate('Downloads'),
-    },
-  ];
+  const sections = useMemo(
+    () => [
+      {
+        id: 'favorites',
+        icon: Heart,
+        iconColor: theme.accent,
+        iconBg: theme.accent + '20',
+        label: 'Liked Songs',
+        count: favorites.length,
+        onPress: () => navigation.navigate('Favorites'),
+      },
+      {
+        id: 'downloads',
+        icon: Download,
+        iconColor: theme.success,
+        iconBg: theme.success + '20',
+        label: 'Downloads',
+        count: downloadedTracks.length,
+        onPress: () => navigation.navigate('Downloads'),
+      },
+    ],
+    [favorites.length, downloadedTracks.length, theme, navigation]
+  );
 
   return (
     <SafeAreaView
@@ -231,6 +225,16 @@ export function LibraryScreen() {
         }
         contentContainerStyle={{ paddingBottom: MINI_PLAYER_HEIGHT + 20 }}
         showsVerticalScrollIndicator={false}
+      />
+
+      <TextInputModal
+        visible={showCreateInput}
+        title="New Playlist"
+        message="Enter a name for your playlist"
+        placeholder="Playlist name"
+        submitLabel="Create"
+        onSubmit={handleCreateSubmit}
+        onCancel={() => setShowCreateInput(false)}
       />
     </SafeAreaView>
   );

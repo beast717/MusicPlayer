@@ -45,7 +45,7 @@ function toTrack(item: Track | SearchResult): Track {
   return item;
 }
 
-export function TrackItem({
+const TrackItemInner = ({
   track: item,
   index,
   showIndex,
@@ -55,7 +55,7 @@ export function TrackItem({
   isPlaying,
   isLoading,
   compact,
-}: TrackItemProps) {
+}: TrackItemProps) => {
   const { theme } = useTheme();
   const track = toTrack(item);
   const isFavorite = useLibraryStore((s) => s.isFavorite(track.id));
@@ -80,6 +80,9 @@ export function TrackItem({
       onPress={onPress}
       onLongPress={onLongPress}
       activeOpacity={0.6}
+      accessibilityRole="button"
+      accessibilityLabel={`${track.title} by ${track.artist}`}
+      accessibilityState={{ selected: isPlaying }}
     >
       {showIndex && index !== undefined && (
         <Text
@@ -97,7 +100,12 @@ export function TrackItem({
           source={{ uri: track.localThumbnailPath || track.thumbnailUrl }}
           style={[
             styles.thumbnailImage,
-            { width: imageSize, height: imageSize, borderRadius: borderRadius.sm },
+            {
+              width: imageSize,
+              height: imageSize,
+              borderRadius: borderRadius.sm,
+              backgroundColor: theme.card,
+            },
           ]}
         />
         {isPlaying && (
@@ -156,6 +164,8 @@ export function TrackItem({
               onPress={() => toggleFavorite(track)}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               style={styles.actionButton}
+              accessibilityRole="button"
+              accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
             >
               <Heart
                 size={18}
@@ -169,6 +179,8 @@ export function TrackItem({
                 onPress={onMorePress}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                 style={styles.actionButton}
+                accessibilityRole="button"
+                accessibilityLabel="More options"
               >
                 <MoreVertical size={18} color={theme.textTertiary} />
               </TouchableOpacity>
@@ -178,7 +190,9 @@ export function TrackItem({
       </View>
     </TouchableOpacity>
   );
-}
+};
+
+export const TrackItem = React.memo(TrackItemInner);
 
 export { toTrack, isSearchResult };
 
@@ -198,7 +212,6 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   thumbnailImage: {
-    backgroundColor: '#333',
   },
   playingOverlay: {
     ...StyleSheet.absoluteFillObject,

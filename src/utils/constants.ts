@@ -1,4 +1,5 @@
 // App constants
+export const APP_VERSION = '1.0.0';
 export const MAX_SEARCH_HISTORY = 20;
 export const STREAM_URL_TTL = 4 * 60 * 60 * 1000; // 4 hours in ms
 export const SEARCH_DEBOUNCE_MS = 400;

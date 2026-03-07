@@ -86,10 +86,10 @@ export const usePlayerStore = create<PlayerStore>()(
             isLoading: false,
             recentlyPlayed: recent.slice(0, MAX_RECENT_TRACKS),
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
           set({
             isLoading: false,
-            error: err.message || 'Failed to play track',
+            error: err instanceof Error ? err.message : 'Failed to play track',
           });
         }
       },
@@ -148,10 +148,10 @@ export const usePlayerStore = create<PlayerStore>()(
             isLoading: false,
             recentlyPlayed: recent.slice(0, MAX_RECENT_TRACKS),
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
           set({
             isLoading: false,
-            error: err.message || 'Failed to play queue',
+            error: err instanceof Error ? err.message : 'Failed to play queue',
           });
         }
       },
@@ -174,7 +174,7 @@ export const usePlayerStore = create<PlayerStore>()(
             artwork: track.localThumbnailPath || track.thumbnailUrl,
             duration: track.duration,
           });
-        } catch (err: any) {
+        } catch (err: unknown) {
           console.warn('Failed to add to queue:', err);
         }
       },
@@ -191,46 +191,31 @@ export const usePlayerStore = create<PlayerStore>()(
 
       clearQueue: async () => {
         set({ queue: [] });
-        await TrackPlayer.reset();
+        try {
+          await TrackPlayer.reset();
+        } catch (err) {
+          console.warn('Failed to clear queue:', err);
+        }
       },
 
       togglePlayPause: async () => {
         const { isPlaying } = get();
-        if (isPlaying) {
-          await TrackPlayer.pause();
-        } else {
-          await TrackPlayer.play();
+        try {
+          if (isPlaying) {
+            await TrackPlayer.pause();
+          } else {
+            await TrackPlayer.play();
+          }
+          set({ isPlaying: !isPlaying });
+        } catch (err) {
+          console.warn('Failed to toggle play/pause:', err);
         }
-        set({ isPlaying: !isPlaying });
       },
 
       skipToNext: async () => {
         try {
-          // Re-resolve stream URL for next track
-          const queue = await TrackPlayer.getQueue();
-          const currentIndex = await TrackPlayer.getActiveTrackIndex();
-          if (currentIndex === undefined || currentIndex === null) return;
-
-          const nextIndex = currentIndex + 1;
-          if (nextIndex < queue.length) {
-            const nextTrack = get().queue[nextIndex];
-            if (nextTrack && !nextTrack.localFilePath) {
-              try {
-                const url = await getAudioStreamUrl(nextTrack.id);
-                await TrackPlayer.updateMetadataForTrack(nextIndex, {
-                  ...queue[nextIndex],
-                });
-                // Update the URL by removing and re-adding
-                // TrackPlayer doesn't have updateUrl, so we handle it via track change event
-              } catch {}
-            }
-          }
-
           await TrackPlayer.skipToNext();
-          const { queue: storeQueue } = get();
-          if (nextIndex < storeQueue.length) {
-            set({ currentTrack: storeQueue[nextIndex] });
-          }
+          // currentTrack is updated by PlaybackActiveTrackChanged event
         } catch (err) {
           console.warn('Failed to skip to next:', err);
         }
@@ -239,18 +224,18 @@ export const usePlayerStore = create<PlayerStore>()(
       skipToPrevious: async () => {
         try {
           await TrackPlayer.skipToPrevious();
-          const currentIndex = await TrackPlayer.getActiveTrackIndex();
-          const { queue: storeQueue } = get();
-          if (currentIndex !== undefined && currentIndex !== null && currentIndex < storeQueue.length) {
-            set({ currentTrack: storeQueue[currentIndex] });
-          }
+          // currentTrack is updated by PlaybackActiveTrackChanged event
         } catch (err) {
           console.warn('Failed to skip to previous:', err);
         }
       },
 
       seekTo: async (position: number) => {
-        await TrackPlayer.seekTo(position);
+        try {
+          await TrackPlayer.seekTo(position);
+        } catch (err) {
+          console.warn('Failed to seek:', err);
+        }
       },
 
       toggleShuffle: () => {

@@ -5,6 +5,7 @@ import { StyleSheet } from 'react-native';
 import { ThemeProvider } from './src/theme';
 import { Navigation } from './src/navigation';
 import { setupTrackPlayer } from './src/services/trackPlayerService';
+import { ErrorBoundary } from './src/components';
 
 export default function App() {
   useEffect(() => {
@@ -14,9 +15,11 @@ export default function App() {
   return (
     <GestureHandlerRootView style={styles.container}>
       <SafeAreaProvider>
-        <ThemeProvider>
-          <Navigation />
-        </ThemeProvider>
+        <ErrorBoundary>
+          <ThemeProvider>
+            <Navigation />
+          </ThemeProvider>
+        </ErrorBoundary>
       </SafeAreaProvider>
     </GestureHandlerRootView>
   );

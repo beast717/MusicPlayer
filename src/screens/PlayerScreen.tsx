@@ -5,7 +5,7 @@ import {
   Image,
   TouchableOpacity,
   StyleSheet,
-  Dimensions,
+  useWindowDimensions,
   Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -31,14 +31,13 @@ import { usePlayerStore, useLibraryStore, useDownloadStore } from '../stores';
 import { useProgress } from 'react-native-track-player';
 import { formatDuration } from '../utils/helpers';
 
-const { width: SCREEN_WIDTH, height: SCREEN_HEIGHT } = Dimensions.get('window');
-const ARTWORK_SIZE = SCREEN_WIDTH - spacing.xxl * 2;
-
 interface PlayerScreenProps {
   onDismiss: () => void;
 }
 
 export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
+  const { width: SCREEN_WIDTH } = useWindowDimensions();
+  const ARTWORK_SIZE = SCREEN_WIDTH - spacing.xxl * 2;
   const { theme, isDark } = useTheme();
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const isPlaying = usePlayerStore((s) => s.isPlaying);
@@ -60,10 +59,7 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
     currentTrack ? s.isDownloaded(currentTrack.id) : false
   );
 
-  let progress = { position: 0, duration: 0, buffered: 0 };
-  try {
-    progress = useProgress(500);
-  } catch {}
+  const progress = useProgress(500);
 
   const handleSeek = useCallback(
     (value: number) => {
@@ -83,13 +79,13 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
       style={[
         styles.container,
         {
-          backgroundColor: isDark ? '#0A0A0F' : '#F8F8FC',
+          backgroundColor: theme.background,
         },
       ]}
     >
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onDismiss} style={styles.headerButton}>
+        <TouchableOpacity onPress={onDismiss} style={styles.headerButton} accessibilityRole="button" accessibilityLabel="Close player">
           <ChevronDown size={28} color={theme.text} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
@@ -124,6 +120,7 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
               width: ARTWORK_SIZE,
               height: ARTWORK_SIZE,
               borderRadius: borderRadius.xl,
+              backgroundColor: theme.card,
             },
           ]}
         />
@@ -155,6 +152,8 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
           <TouchableOpacity
             onPress={() => toggleFavorite(currentTrack)}
             style={styles.favoriteButton}
+            accessibilityRole="button"
+            accessibilityLabel={isFavorite ? 'Remove from favorites' : 'Add to favorites'}
           >
             <Heart
               size={24}
@@ -189,20 +188,22 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
 
       {/* Controls */}
       <View style={styles.controls}>
-        <TouchableOpacity onPress={toggleShuffle} style={styles.sideControl}>
+        <TouchableOpacity onPress={toggleShuffle} style={styles.sideControl} accessibilityRole="button" accessibilityLabel={shuffleActive ? 'Disable shuffle' : 'Enable shuffle'}>
           <Shuffle
             size={22}
             color={shuffleActive ? theme.primary : theme.textTertiary}
           />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={skipToPrevious} style={styles.skipButton}>
+        <TouchableOpacity onPress={skipToPrevious} style={styles.skipButton} accessibilityRole="button" accessibilityLabel="Previous track">
           <SkipBack size={28} color={theme.text} fill={theme.text} />
         </TouchableOpacity>
 
         <TouchableOpacity
           onPress={togglePlayPause}
-          style={[styles.playButton, { backgroundColor: theme.primary }]}
+          style={[styles.playButton, { backgroundColor: theme.primary, shadowColor: theme.primary }]}
+          accessibilityRole="button"
+          accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
         >
           {isPlaying ? (
             <Pause size={30} color="#FFF" fill="#FFF" />
@@ -211,11 +212,11 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={skipToNext} style={styles.skipButton}>
+        <TouchableOpacity onPress={skipToNext} style={styles.skipButton} accessibilityRole="button" accessibilityLabel="Next track">
           <SkipForward size={28} color={theme.text} fill={theme.text} />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={cycleRepeatMode} style={styles.sideControl}>
+        <TouchableOpacity onPress={cycleRepeatMode} style={styles.sideControl} accessibilityRole="button" accessibilityLabel={`Repeat mode: ${repeatMode}`}>
           <RepeatIcon
             size={22}
             color={repeatActive ? theme.primary : theme.textTertiary}
@@ -275,7 +276,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   artwork: {
-    backgroundColor: '#333',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.3,
@@ -329,7 +329,6 @@ const styles = StyleSheet.create({
     borderRadius: 32,
     justifyContent: 'center',
     alignItems: 'center',
-    shadowColor: '#6C5CE7',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 8,

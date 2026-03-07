@@ -15,12 +15,13 @@ import {
   Trash2,
   Edit3,
 } from 'lucide-react-native';
-import { TrackItem, AddToPlaylistModal } from '../components';
+import { TrackItem, AddToPlaylistModal, TextInputModal } from '../components';
 import { useTheme } from '../theme';
 import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
 import { useLibraryStore, usePlayerStore } from '../stores';
 import { PlaylistDetailScreenProps, Track } from '../types';
+import { shuffleArray } from '../utils/helpers';
 
 export function PlaylistDetailScreen({
   route,
@@ -37,6 +38,7 @@ export function PlaylistDetailScreen({
   const currentTrack = usePlayerStore((s) => s.currentTrack);
 
   const [playlistTrack, setPlaylistTrack] = useState<Track | null>(null);
+  const [showRenameModal, setShowRenameModal] = useState(false);
 
   if (!playlist) {
     return (
@@ -58,7 +60,7 @@ export function PlaylistDetailScreen({
 
   const handleShuffleAll = () => {
     if (playlist.tracks.length > 0) {
-      const shuffled = [...playlist.tracks].sort(() => Math.random() - 0.5);
+      const shuffled = shuffleArray(playlist.tracks);
       playQueue(shuffled);
     }
   };
@@ -79,23 +81,12 @@ export function PlaylistDetailScreen({
   };
 
   const handleRename = () => {
-    Alert.prompt(
-      'Rename Playlist',
-      'Enter a new name',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Rename',
-          onPress: (name?: string) => {
-            if (name?.trim()) {
-              renamePlaylist(playlistId, name.trim());
-            }
-          },
-        },
-      ],
-      'plain-text',
-      playlist.name
-    );
+    setShowRenameModal(true);
+  };
+
+  const handleRenameSubmit = (name: string) => {
+    renamePlaylist(playlistId, name);
+    setShowRenameModal(false);
   };
 
   const handleDelete = () => {
@@ -223,6 +214,17 @@ export function PlaylistDetailScreen({
         visible={!!playlistTrack}
         track={playlistTrack}
         onClose={() => setPlaylistTrack(null)}
+      />
+
+      <TextInputModal
+        visible={showRenameModal}
+        title="Rename Playlist"
+        message="Enter a new name"
+        placeholder="Playlist name"
+        defaultValue={playlist.name}
+        submitLabel="Rename"
+        onSubmit={handleRenameSubmit}
+        onCancel={() => setShowRenameModal(false)}
       />
     </SafeAreaView>
   );

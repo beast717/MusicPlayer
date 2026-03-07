@@ -15,6 +15,7 @@ import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
 import { useLibraryStore, usePlayerStore } from '../stores';
 import { useNavigation } from '@react-navigation/native';
+import { shuffleArray } from '../utils/helpers';
 
 export function FavoritesScreen() {
   const { theme } = useTheme();
@@ -31,7 +32,7 @@ export function FavoritesScreen() {
 
   const handleShuffleAll = () => {
     if (favorites.length > 0) {
-      const shuffled = [...favorites].sort(() => Math.random() - 0.5);
+      const shuffled = shuffleArray(favorites);
       playQueue(shuffled);
     }
   };

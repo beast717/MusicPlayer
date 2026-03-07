@@ -23,6 +23,7 @@ import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
 import { useLibraryStore, usePlayerStore, useDownloadStore } from '../stores';
 import { clearAllDownloads, getTotalDownloadsSize } from '../services/downloadManager';
 import { useNavigation } from '@react-navigation/native';
+import { formatSize, shuffleArray } from '../utils/helpers';
 
 export function DownloadsScreen() {
   const { theme } = useTheme();
@@ -38,14 +39,6 @@ export function DownloadsScreen() {
   useEffect(() => {
     getTotalDownloadsSize().then(setTotalSize);
   }, [downloadedTracks.length]);
-
-  const formatSize = (bytes: number): string => {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  };
 
   const handleDeleteTrack = (trackId: string, title: string) => {
     Alert.alert(
@@ -89,7 +82,7 @@ export function DownloadsScreen() {
 
   const handleShuffleAll = () => {
     if (downloadedTracks.length > 0) {
-      const shuffled = [...downloadedTracks].sort(() => Math.random() - 0.5);
+      const shuffled = shuffleArray(downloadedTracks);
       playQueue(shuffled);
     }
   };

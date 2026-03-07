@@ -23,7 +23,8 @@ import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
 import { useSettingsStore, useLibraryStore } from '../stores';
 import { clearAllDownloads, getTotalDownloadsSize } from '../services/downloadManager';
-import { AudioQuality } from '../utils/constants';
+import { AudioQuality, APP_VERSION } from '../utils/constants';
+import { formatSize } from '../utils/helpers';
 
 export function SettingsScreen() {
   const { theme, isDark } = useTheme();
@@ -41,14 +42,6 @@ export function SettingsScreen() {
   useEffect(() => {
     getTotalDownloadsSize().then(setTotalSize);
   }, [downloadedTracks.length]);
-
-  const formatSize = (bytes: number): string => {
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
-  };
 
   const handleAudioQuality = () => {
     const options: { label: string; value: AudioQuality }[] = [
@@ -225,7 +218,7 @@ export function SettingsScreen() {
               Version
             </Text>
             <Text style={[typography.body, { color: theme.textSecondary }]}>
-              1.0.0
+              {APP_VERSION}
             </Text>
           </View>
 
@@ -235,14 +228,14 @@ export function SettingsScreen() {
                 width: 20,
                 height: 20,
                 borderRadius: 10,
-                backgroundColor: isDark ? '#FFF' : '#000',
+                backgroundColor: theme.text,
                 justifyContent: 'center',
                 alignItems: 'center',
               }}
             >
               <Text
                 style={{
-                  color: isDark ? '#000' : '#FFF',
+                  color: theme.background,
                   fontSize: 10,
                   fontWeight: '700',
                 }}

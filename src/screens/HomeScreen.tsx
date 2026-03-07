@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
   Image,
   StyleSheet,
-  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -25,9 +25,8 @@ import { usePlayerStore, useLibraryStore } from '../stores';
 import { Track } from '../types';
 import { useNavigation } from '@react-navigation/native';
 
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
-
 export function HomeScreen() {
+  const { width: SCREEN_WIDTH } = useWindowDimensions();
   const { theme, isDark } = useTheme();
   const navigation = useNavigation<any>();
   const recentlyPlayed = usePlayerStore((s) => s.recentlyPlayed);
@@ -156,7 +155,7 @@ export function HomeScreen() {
                     }}
                     style={[
                       styles.recentImage,
-                      { borderRadius: borderRadius.md },
+                      { borderRadius: borderRadius.md, backgroundColor: theme.card },
                     ]}
                   />
                   <Text
@@ -353,7 +352,6 @@ const styles = StyleSheet.create({
   recentImage: {
     width: 140,
     height: 140,
-    backgroundColor: '#333',
   },
   shuffleButton: {
     flexDirection: 'row',

@@ -95,7 +95,7 @@ export async function getDownloadedFileSize(videoId: string): Promise<number> {
   const filePath = `${DOWNLOADS_DIR}${videoId}.m4a`;
   try {
     const info = await FileSystem.getInfoAsync(filePath);
-    return info.exists && 'size' in info ? ((info as any).size || 0) : 0;
+    return info.exists && 'size' in info ? (info.size ?? 0) : 0;
   } catch {
     return 0;
   }
@@ -105,14 +105,13 @@ export async function getTotalDownloadsSize(): Promise<number> {
   await ensureDirectories();
   try {
     const files = await FileSystem.readDirectoryAsync(DOWNLOADS_DIR);
-    let total = 0;
-    for (const file of files) {
-      const info = await FileSystem.getInfoAsync(`${DOWNLOADS_DIR}${file}`);
-      if (info.exists && 'size' in info) {
-        total += (info as any).size || 0;
-      }
-    }
-    return total;
+    const sizes = await Promise.all(
+      files.map(async (file) => {
+        const info = await FileSystem.getInfoAsync(`${DOWNLOADS_DIR}${file}`);
+        return info.exists && 'size' in info ? (info.size ?? 0) : 0;
+      })
+    );
+    return sizes.reduce((total, size) => total + size, 0);
   } catch {
     return 0;
   }
