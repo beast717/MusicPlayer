@@ -8,7 +8,6 @@ import {
   Image,
   StyleSheet,
   useWindowDimensions,
-  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -41,14 +40,6 @@ export function HomeScreen() {
 
   const handlePlayTrack = useCallback(async (track: Track) => {
     await playTrack(track);
-    const playerError = usePlayerStore.getState().error;
-    if (playerError) {
-      Alert.alert(
-        'Playback Error',
-        playerError,
-        [{ text: 'OK', onPress: () => usePlayerStore.getState().setError(null) }]
-      );
-    }
   }, [playTrack]);
 
   return (

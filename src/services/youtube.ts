@@ -140,6 +140,8 @@ interface CachedStreamUrl {
   timestamp: number;
 }
 
+const STREAM_SOURCE_CACHE_VERSION = 'v3';
+
 type AudioResolveMode = 'direct' | 'playback';
 
 interface ResolveAudioOptions {
@@ -153,7 +155,7 @@ function getCachedAudioSource(
   mode: AudioResolveMode
 ): ResolvedAudioSource | null {
   const cached = mmkvStorage.getObject<CachedStreamUrl>(
-    `stream_${mode}_${videoId}`
+    `stream_${STREAM_SOURCE_CACHE_VERSION}_${mode}_${videoId}`
   );
   if (cached && Date.now() - cached.timestamp < STREAM_URL_TTL) {
     return {
@@ -170,12 +172,15 @@ function cacheAudioSource(
   mode: AudioResolveMode,
   source: ResolvedAudioSource
 ): void {
-  mmkvStorage.setObject<CachedStreamUrl>(`stream_${mode}_${videoId}`, {
+  mmkvStorage.setObject<CachedStreamUrl>(
+    `stream_${STREAM_SOURCE_CACHE_VERSION}_${mode}_${videoId}`,
+    {
     url: source.url,
     mimeType: source.mimeType,
     streamType: source.streamType,
     timestamp: Date.now(),
-  });
+    }
+  );
 }
 
 function extractAudioStreamsFromStreamingData(
@@ -622,7 +627,8 @@ export async function getAudioPlaybackSource(
 ): Promise<ResolvedAudioSource> {
   return resolveAudioSource(videoId, quality, {
     allowAdaptiveManifest: Platform.OS === 'ios',
-    preferHls: Platform.OS === 'ios',
+    // Prefer direct audio when YouTube exposes it; HLS stays as a fallback.
+    preferHls: false,
     cacheMode: 'playback',
   });
 }

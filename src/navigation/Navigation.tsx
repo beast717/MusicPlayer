@@ -1,5 +1,5 @@
-import React, { useState, useCallback, useRef } from 'react';
-import { View, StyleSheet, Modal, StatusBar } from 'react-native';
+import React, { useEffect, useRef, useState } from 'react';
+import { Alert, View, StyleSheet, Modal, StatusBar } from 'react-native';
 import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
@@ -81,7 +81,27 @@ function SettingsStackNavigator() {
 export function Navigation() {
   const { theme, isDark } = useTheme();
   const currentTrack = usePlayerStore((s) => s.currentTrack);
+  const playerError = usePlayerStore((s) => s.error);
+  const clearPlayerError = usePlayerStore((s) => s.setError);
   const [playerVisible, setPlayerVisible] = useState(false);
+  const shownErrorRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!playerError || shownErrorRef.current === playerError) {
+      return;
+    }
+
+    shownErrorRef.current = playerError;
+    Alert.alert('Playback Error', playerError, [
+      {
+        text: 'OK',
+        onPress: () => {
+          shownErrorRef.current = null;
+          clearPlayerError(null);
+        },
+      },
+    ]);
+  }, [clearPlayerError, playerError]);
 
   const navigationTheme = isDark
     ? {
