@@ -247,9 +247,14 @@ async function getStreamFromWatchPage(videoId: string): Promise<AudioStream[]> {
 /**
  * Fallback: try InnerTube player API with alternative client identities.
  */
+interface InnerTubeResult {
+  streams: AudioStream[];
+  diagnostics: string[];
+}
+
 async function getStreamFromInnerTube(
   videoId: string
-): Promise<AudioStream[]> {
+): Promise<InnerTubeResult> {
   const clients = [
     {
       clientName: 'ANDROID_VR',
@@ -260,26 +265,12 @@ async function getStreamFromInnerTube(
       deviceMake: 'Google',
       deviceModel: 'Pixel 8',
     },
-    {
-      clientName: 'ANDROID_TESTSUITE',
-      clientVersion: '1.9',
-      androidSdkVersion: 34,
-      osName: 'Android',
-      osVersion: '14',
-    },
-    {
-      clientName: 'ANDROID_UNPLUGGED',
-      clientVersion: '8.49.0',
-      androidSdkVersion: 34,
-      osName: 'Android',
-      osVersion: '14',
-    },
   ];
+
+  const diagnostics: string[] = [];
 
   for (const client of clients) {
     try {
-      console.log(`[YT] Trying InnerTube client: ${client.clientName}`);
-
       const response = await fetchWithTimeout(
         'https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false',
         {
@@ -290,44 +281,56 @@ async function getStreamFromInnerTube(
             videoId,
             contentCheckOk: true,
             racyCheckOk: true,
+            params: 'CgIQBg',
           }),
         },
         15000
       );
 
-      console.log(`[YT] ${client.clientName} HTTP ${response.status}`);
-      if (!response.ok) continue;
+      if (!response.ok) {
+        diagnostics.push(`${client.clientName}: HTTP ${response.status}`);
+        continue;
+      }
 
       const data = await response.json();
       const status = data.playabilityStatus?.status;
-      console.log(`[YT] ${client.clientName} playability: ${status}`);
-      if (status !== 'OK') continue;
+      const reason = data.playabilityStatus?.reason || '';
+
+      if (status !== 'OK') {
+        diagnostics.push(`${client.clientName}: ${status} ${reason}`.trim());
+        continue;
+      }
 
       const adaptiveFormats = data.streamingData?.adaptiveFormats || [];
+      const allAudio = adaptiveFormats.filter(
+        (f: any) => (f.mimeType || '').startsWith('audio/')
+      );
+      const withUrl = allAudio.filter((f: any) => f.url);
 
-      const audioStreams: AudioStream[] = adaptiveFormats
-        .filter((f: any) => (f.mimeType || '').startsWith('audio/'))
-        .map((f: any) => ({
-          url: f.url || '',
-          mimeType: (f.mimeType || '').split(';')[0],
-          bitrate: f.bitrate || 0,
-          quality: f.audioQuality || '',
-          codec: f.mimeType?.match(/codecs="([^"]+)"/)?.[1] || '',
-        }))
-        .filter((s: AudioStream) => s.url !== '');
+      const audioStreams: AudioStream[] = withUrl.map((f: any) => ({
+        url: f.url,
+        mimeType: (f.mimeType || '').split(';')[0],
+        bitrate: f.bitrate || 0,
+        quality: f.audioQuality || '',
+        codec: f.mimeType?.match(/codecs="([^"]+)"/)?.[1] || '',
+      }));
 
       if (audioStreams.length > 0) {
-        console.log(`[YT] ${client.clientName} found ${audioStreams.length} audio streams`);
-        return audioStreams;
+        return { streams: audioStreams, diagnostics };
       }
-      console.log(`[YT] ${client.clientName} OK but 0 usable audio streams`);
+
+      // Diagnostic: why no streams?
+      const hasSABR = !!data.streamingData?.serverAbrStreamingUrl;
+      diagnostics.push(
+        `${client.clientName}: OK but audio=${allAudio.length} withUrl=${withUrl.length} adaptive=${adaptiveFormats.length} sabr=${hasSABR}`
+      );
     } catch (err: any) {
-      console.warn(`[YT] ${client.clientName} error:`, err.message);
+      diagnostics.push(`${client.clientName}: ${err.message}`);
       continue;
     }
   }
 
-  return [];
+  return { streams: [], diagnostics };
 }
 
 // ─── Piped API Fallback ─────────────────────────────────────────────
@@ -442,15 +445,18 @@ export async function getAudioStreamUrl(
 
   // Method 1: InnerTube player API (ANDROID_VR client – returns direct URLs)
   try {
-    const streams = await getStreamFromInnerTube(videoId);
-    const streamUrl = pickBestAudioStream(streams, targetBitrate);
+    const result = await getStreamFromInnerTube(videoId);
+    const streamUrl = pickBestAudioStream(result.streams, targetBitrate);
     if (streamUrl) {
       cacheStreamUrl(videoId, streamUrl);
       return streamUrl;
     }
-    errors.push('InnerTube player: no suitable audio stream found');
+    const diag = result.diagnostics.length > 0
+      ? result.diagnostics.join('; ')
+      : `streams=${result.streams.length}`;
+    errors.push(`InnerTube: ${diag}`);
   } catch (err: any) {
-    errors.push(`InnerTube player: ${err.message}`);
+    errors.push(`InnerTube: ${err.message}`);
   }
 
   // Method 2: Piped API (deciphers signatures server-side)
