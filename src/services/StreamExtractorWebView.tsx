@@ -1,4 +1,4 @@
-import React, { useRef, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { View, StyleSheet } from 'react-native';
 import WebView, { WebViewMessageEvent } from 'react-native-webview';
 
@@ -12,215 +12,180 @@ interface StreamResult {
 }
 
 interface PendingRequest {
+  videoId: string;
   resolve: (streams: StreamResult[]) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
-// ─── Singleton state ────────────────────────────────────────────────
+// ─── Singleton bridge ───────────────────────────────────────────────
 
 let pendingRequest: PendingRequest | null = null;
-let webViewRef: WebView | null = null;
-let isReady = false;
+let requestVideoId: ((videoId: string) => void) | null = null;
+let dismissWebView: (() => void) | null = null;
 
-const EXTRACT_TIMEOUT = 20000; // 20s per video
+const EXTRACT_TIMEOUT = 20000;
 
-// Injected JS that hooks into the YouTube embed player to intercept stream data.
-// It hooks XMLHttpRequest to capture the /player API response that YouTube's own
-// player JS makes, which contains authenticated stream URLs (with PoToken).
-const INJECTED_JS = `
+// JS injected before content loads on EVERY page navigation.
+// Hooks XHR and fetch to intercept YouTube's /player API response.
+const INTERCEPT_JS = `
 (function() {
-  // Prevent duplicate injection
-  if (window.__streamInterceptorInstalled) return;
-  window.__streamInterceptorInstalled = true;
+  if (window.__intercepted) return;
+  window.__intercepted = true;
 
-  var originalOpen = XMLHttpRequest.prototype.open;
-  var originalSend = XMLHttpRequest.prototype.send;
+  function sendStreams(data) {
+    var formats = (data.streamingData && data.streamingData.adaptiveFormats) || [];
+    var audio = [];
+    for (var i = 0; i < formats.length; i++) {
+      var f = formats[i];
+      if (f.url && f.mimeType && f.mimeType.indexOf('audio/') === 0) {
+        audio.push({
+          url: f.url,
+          mimeType: f.mimeType.split(';')[0],
+          bitrate: f.bitrate || 0,
+          quality: f.audioQuality || ''
+        });
+      }
+    }
+    var status = data.playabilityStatus && data.playabilityStatus.status;
+    var reason = (data.playabilityStatus && data.playabilityStatus.reason) || '';
+    window.ReactNativeWebView.postMessage(JSON.stringify({
+      type: 'streams',
+      status: status,
+      reason: reason,
+      streams: audio
+    }));
+  }
 
-  XMLHttpRequest.prototype.open = function(method, url) {
-    this.__url = url;
-    return originalOpen.apply(this, arguments);
+  // Hook XMLHttpRequest
+  var origOpen = XMLHttpRequest.prototype.open;
+  var origSend = XMLHttpRequest.prototype.send;
+  XMLHttpRequest.prototype.open = function(m, u) {
+    this._u = u;
+    return origOpen.apply(this, arguments);
   };
-
   XMLHttpRequest.prototype.send = function() {
     var xhr = this;
-    var url = this.__url || '';
-
-    if (url.indexOf('/youtubei/v1/player') !== -1) {
-      var origOnReady = xhr.onreadystatechange;
-      xhr.onreadystatechange = function() {
-        if (xhr.readyState === 4 && xhr.status === 200) {
-          try {
-            var data = JSON.parse(xhr.responseText);
-            var formats = (data.streamingData && data.streamingData.adaptiveFormats) || [];
-            var audio = [];
-            for (var i = 0; i < formats.length; i++) {
-              var f = formats[i];
-              if (f.url && f.mimeType && f.mimeType.indexOf('audio/') === 0) {
-                audio.push({
-                  url: f.url,
-                  mimeType: f.mimeType.split(';')[0],
-                  bitrate: f.bitrate || 0,
-                  quality: f.audioQuality || ''
-                });
-              }
-            }
-            var status = data.playabilityStatus && data.playabilityStatus.status;
-            var reason = (data.playabilityStatus && data.playabilityStatus.reason) || '';
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'playerResponse',
-              status: status,
-              reason: reason,
-              streams: audio
-            }));
-          } catch(e) {
-            window.ReactNativeWebView.postMessage(JSON.stringify({
-              type: 'error',
-              message: 'Parse error: ' + e.message
-            }));
-          }
-        }
-        if (origOnReady) origOnReady.apply(this, arguments);
-      };
+    if ((xhr._u || '').indexOf('/youtubei/v1/player') !== -1) {
+      xhr.addEventListener('load', function() {
+        try { sendStreams(JSON.parse(xhr.responseText)); } catch(e) {}
+      });
     }
-    return originalSend.apply(this, arguments);
+    return origSend.apply(this, arguments);
   };
 
-  // Also hook fetch() in case YouTube uses it instead of XHR
-  var originalFetch = window.fetch;
-  window.fetch = function(input, init) {
+  // Hook fetch
+  var origFetch = window.fetch;
+  window.fetch = function(input) {
     var url = typeof input === 'string' ? input : (input && input.url) || '';
-    var promise = originalFetch.apply(this, arguments);
-
+    var p = origFetch.apply(this, arguments);
     if (url.indexOf('/youtubei/v1/player') !== -1) {
-      promise.then(function(response) {
-        return response.clone().json().then(function(data) {
-          var formats = (data.streamingData && data.streamingData.adaptiveFormats) || [];
-          var audio = [];
-          for (var i = 0; i < formats.length; i++) {
-            var f = formats[i];
-            if (f.url && f.mimeType && f.mimeType.indexOf('audio/') === 0) {
-              audio.push({
-                url: f.url,
-                mimeType: f.mimeType.split(';')[0],
-                bitrate: f.bitrate || 0,
-                quality: f.audioQuality || ''
-              });
-            }
-          }
-          var status = data.playabilityStatus && data.playabilityStatus.status;
-          var reason = (data.playabilityStatus && data.playabilityStatus.reason) || '';
-          window.ReactNativeWebView.postMessage(JSON.stringify({
-            type: 'playerResponse',
-            status: status,
-            reason: reason,
-            streams: audio
-          }));
-        });
+      p.then(function(r) {
+        return r.clone().json().then(function(d) { sendStreams(d); });
       }).catch(function() {});
     }
-    return promise;
+    return p;
   };
-
-  // Signal ready
-  window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ready' }));
 })();
 true;
 `;
 
 // ─── Public API ─────────────────────────────────────────────────────
 
-/**
- * Extract audio stream URLs for a video by loading YouTube's embed player
- * in a hidden WebView. The WebView handles BotGuard/PoToken automatically.
- */
-export function extractStreamsViaWebView(videoId: string): Promise<StreamResult[]> {
+export function extractStreamsViaWebView(
+  videoId: string
+): Promise<StreamResult[]> {
   return new Promise((resolve, reject) => {
-    if (!webViewRef) {
-      reject(new Error('WebView not mounted'));
-      return;
-    }
-
-    // Cancel any existing pending request
+    // Cancel any prior request
     if (pendingRequest) {
       clearTimeout(pendingRequest.timer);
-      pendingRequest.reject(new Error('Cancelled by new request'));
+      pendingRequest.reject(new Error('Cancelled'));
       pendingRequest = null;
     }
 
     const timer = setTimeout(() => {
-      if (pendingRequest) {
-        pendingRequest = null;
-        reject(new Error('WebView extraction timed out'));
-      }
+      pendingRequest = null;
+      if (dismissWebView) dismissWebView();
+      reject(new Error('WebView timed out'));
     }, EXTRACT_TIMEOUT);
 
-    pendingRequest = { resolve, reject, timer };
+    pendingRequest = { videoId, resolve, reject, timer };
 
-    // Load the embed page - YouTube's own JS will make the /player API call
-    const embedUrl = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1&enablejsapi=1`;
-    webViewRef.injectJavaScript(`
-      window.location.href = ${JSON.stringify(embedUrl)};
-      true;
-    `);
+    // Tell the component to show a WebView with this videoId
+    if (requestVideoId) {
+      requestVideoId(videoId);
+    } else {
+      clearTimeout(timer);
+      pendingRequest = null;
+      reject(new Error('StreamExtractor not mounted'));
+    }
   });
 }
 
 // ─── Component ──────────────────────────────────────────────────────
 
 export function StreamExtractorWebView() {
-  const ref = useRef<WebView>(null);
+  const [videoId, setVideoId] = useState<string | null>(null);
+  const webViewRef = useRef<WebView>(null);
 
-  const handleRef = useCallback((instance: WebView | null) => {
-    ref.current = instance;
-    webViewRef = instance;
-    isReady = !!instance;
+  // Register the bridge so extractStreamsViaWebView can trigger renders
+  useEffect(() => {
+    requestVideoId = (id: string) => setVideoId(id);
+    dismissWebView = () => setVideoId(null);
+    return () => {
+      requestVideoId = null;
+      dismissWebView = null;
+    };
   }, []);
 
   const handleMessage = useCallback((event: WebViewMessageEvent) => {
     try {
-      const data = JSON.parse(event.nativeEvent.data);
+      const msg = JSON.parse(event.nativeEvent.data);
+      if (msg.type !== 'streams' || !pendingRequest) return;
 
-      if (data.type === 'ready') {
-        isReady = true;
-        return;
-      }
+      const req = pendingRequest;
+      clearTimeout(req.timer);
+      pendingRequest = null;
+      setVideoId(null); // unmount WebView
 
-      if (data.type === 'playerResponse' && pendingRequest) {
-        const req = pendingRequest;
-        clearTimeout(req.timer);
-        pendingRequest = null;
-
-        if (data.status === 'OK' && data.streams.length > 0) {
-          req.resolve(data.streams);
-        } else {
-          req.reject(
-            new Error(
-              `WebView: ${data.status || 'unknown'}${data.reason ? ' - ' + data.reason : ''} (audio=${data.streams?.length || 0})`
-            )
-          );
-        }
-        return;
-      }
-
-      if (data.type === 'error' && pendingRequest) {
-        const req = pendingRequest;
-        clearTimeout(req.timer);
-        pendingRequest = null;
-        req.reject(new Error(`WebView: ${data.message}`));
+      if (msg.status === 'OK' && msg.streams.length > 0) {
+        req.resolve(msg.streams);
+      } else {
+        req.reject(
+          new Error(
+            `WebView: ${msg.status || 'unknown'}${msg.reason ? ' - ' + msg.reason : ''} (audio=${msg.streams?.length ?? 0})`
+          )
+        );
       }
     } catch {
-      // Ignore non-JSON messages from the WebView
+      // ignore non-JSON messages from YouTube page
     }
   }, []);
+
+  const handleError = useCallback(() => {
+    if (pendingRequest) {
+      const req = pendingRequest;
+      clearTimeout(req.timer);
+      pendingRequest = null;
+      setVideoId(null);
+      req.reject(new Error('WebView: page load failed'));
+    }
+  }, []);
+
+  // Only render the WebView when there's an active extraction request
+  if (!videoId) return null;
+
+  const embedUrl = `https://www.youtube.com/embed/${encodeURIComponent(videoId)}?autoplay=1`;
 
   return (
     <View style={styles.hidden} pointerEvents="none">
       <WebView
-        ref={handleRef}
-        source={{ uri: 'about:blank' }}
-        injectedJavaScript={INJECTED_JS}
+        ref={webViewRef}
+        source={{ uri: embedUrl }}
+        injectedJavaScriptBeforeContentLoaded={INTERCEPT_JS}
         onMessage={handleMessage}
+        onError={handleError}
+        onHttpError={handleError}
         javaScriptEnabled
         domStorageEnabled
         mediaPlaybackRequiresUserAction={false}
