@@ -8,6 +8,7 @@ import {
   Image,
   StyleSheet,
   useWindowDimensions,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
@@ -37,6 +38,18 @@ export function HomeScreen() {
   const playlists = useLibraryStore((s) => s.playlists);
 
   const greeting = getGreeting();
+
+  const handlePlayTrack = useCallback(async (track: Track) => {
+    await playTrack(track);
+    const playerError = usePlayerStore.getState().error;
+    if (playerError) {
+      Alert.alert(
+        'Playback Error',
+        playerError,
+        [{ text: 'OK', onPress: () => usePlayerStore.getState().setError(null) }]
+      );
+    }
+  }, [playTrack]);
 
   return (
     <SafeAreaView
@@ -146,7 +159,7 @@ export function HomeScreen() {
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={styles.recentCard}
-                  onPress={() => playTrack(item)}
+                  onPress={() => handlePlayTrack(item)}
                   activeOpacity={0.7}
                 >
                   <Image

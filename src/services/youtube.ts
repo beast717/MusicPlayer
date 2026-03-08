@@ -259,7 +259,6 @@ async function getStreamFromInnerTube(
       osVersion: '14',
       deviceMake: 'Google',
       deviceModel: 'Pixel 8',
-      userAgent: 'com.google.android.apps.youtube.vr.oculus/1.60.19 (Linux; U; Android 14; en_US; eureka-user Build/SQ3A.220705.003.A1) gzip',
     },
     {
       clientName: 'ANDROID_TESTSUITE',
@@ -267,24 +266,25 @@ async function getStreamFromInnerTube(
       androidSdkVersion: 34,
       osName: 'Android',
       osVersion: '14',
-      userAgent: 'com.google.android.youtube/1.9 (Linux; U; Android 14; en_US) gzip',
+    },
+    {
+      clientName: 'ANDROID_UNPLUGGED',
+      clientVersion: '8.49.0',
+      androidSdkVersion: 34,
+      osName: 'Android',
+      osVersion: '14',
     },
   ];
 
   for (const client of clients) {
     try {
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-      };
-      if (client.userAgent) {
-        headers['User-Agent'] = client.userAgent;
-      }
+      console.log(`[YT] Trying InnerTube client: ${client.clientName}`);
 
       const response = await fetchWithTimeout(
-        'https://www.youtube.com/youtubei/v1/player?key=AIzaSyA8eiZmM1FaDVjRy-df2KTyQ_vz_yYM39w&prettyPrint=false',
+        'https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false',
         {
           method: 'POST',
-          headers,
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             context: { client: { ...client, hl: 'en', gl: 'US' } },
             videoId,
@@ -292,13 +292,16 @@ async function getStreamFromInnerTube(
             racyCheckOk: true,
           }),
         },
-        10000
+        15000
       );
 
+      console.log(`[YT] ${client.clientName} HTTP ${response.status}`);
       if (!response.ok) continue;
 
       const data = await response.json();
-      if (data.playabilityStatus?.status !== 'OK') continue;
+      const status = data.playabilityStatus?.status;
+      console.log(`[YT] ${client.clientName} playability: ${status}`);
+      if (status !== 'OK') continue;
 
       const adaptiveFormats = data.streamingData?.adaptiveFormats || [];
 
@@ -313,8 +316,13 @@ async function getStreamFromInnerTube(
         }))
         .filter((s: AudioStream) => s.url !== '');
 
-      if (audioStreams.length > 0) return audioStreams;
-    } catch {
+      if (audioStreams.length > 0) {
+        console.log(`[YT] ${client.clientName} found ${audioStreams.length} audio streams`);
+        return audioStreams;
+      }
+      console.log(`[YT] ${client.clientName} OK but 0 usable audio streams`);
+    } catch (err: any) {
+      console.warn(`[YT] ${client.clientName} error:`, err.message);
       continue;
     }
   }
@@ -485,7 +493,9 @@ export async function getAudioStreamUrl(
   }
 
   console.warn('All stream methods failed:', errors);
-  throw new Error('Could not get audio stream. Please try again later.');
+  throw new Error(
+    `Could not get audio stream.\n${errors.join('\n')}`
+  );
 }
 
 function pickBestAudioStream(

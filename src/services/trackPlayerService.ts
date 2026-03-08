@@ -27,6 +27,15 @@ export async function PlaybackService() {
     await TrackPlayer.seekTo(Math.max(0, position - event.interval));
   });
 
+  // Handle playback errors (e.g. URL returned 403, unsupported format)
+  TrackPlayer.addEventListener(Event.PlaybackError, (event) => {
+    const store = usePlayerStore.getState();
+    const msg = event.message || 'Unknown playback error';
+    console.warn('PlaybackError:', event.code, msg);
+    store.setError(`Playback failed: ${msg}`);
+    store.setIsPlaying(false);
+  });
+
   // Sync UI isPlaying state with actual playback state (phone call, audio focus, etc.)
   TrackPlayer.addEventListener(Event.PlaybackState, (event) => {
     const store = usePlayerStore.getState();
