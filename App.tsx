@@ -6,6 +6,7 @@ import { ThemeProvider } from './src/theme';
 import { Navigation } from './src/navigation';
 import { setupTrackPlayer } from './src/services/trackPlayerService';
 import { ErrorBoundary } from './src/components';
+import { StreamExtractorWebView } from './src/services/StreamExtractorWebView';
 
 export default function App() {
   useEffect(() => {
@@ -18,6 +19,7 @@ export default function App() {
         <ErrorBoundary>
           <ThemeProvider>
             <Navigation />
+            <StreamExtractorWebView />
           </ThemeProvider>
         </ErrorBoundary>
       </SafeAreaProvider>

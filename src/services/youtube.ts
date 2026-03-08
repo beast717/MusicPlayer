@@ -6,6 +6,7 @@ import {
   AudioQuality,
 } from '../utils/constants';
 import { mmkvStorage } from './storage';
+import { extractStreamsViaWebView } from './StreamExtractorWebView';
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -443,7 +444,22 @@ export async function getAudioStreamUrl(
   const targetBitrate = AUDIO_QUALITY_BITRATE[quality];
   const errors: string[] = [];
 
-  // Method 1: InnerTube player API (ANDROID_VR client – returns direct URLs)
+  // Method 1: WebView extraction (uses YouTube's own player with BotGuard/PoToken)
+  try {
+    const wvStreams = await extractStreamsViaWebView(videoId);
+    const mp4 = wvStreams.filter(s => s.mimeType.includes('audio/mp4'));
+    const candidates = mp4.length > 0 ? mp4 : wvStreams;
+    candidates.sort((a, b) => Math.abs(a.bitrate - targetBitrate) - Math.abs(b.bitrate - targetBitrate));
+    if (candidates.length > 0 && candidates[0].url) {
+      cacheStreamUrl(videoId, candidates[0].url);
+      return candidates[0].url;
+    }
+    errors.push(`WebView: ${wvStreams.length} streams but no usable URL`);
+  } catch (err: any) {
+    errors.push(`WebView: ${err.message}`);
+  }
+
+  // Method 2: InnerTube player API (ANDROID_VR client – fallback)
   try {
     const result = await getStreamFromInnerTube(videoId);
     const streamUrl = pickBestAudioStream(result.streams, targetBitrate);
@@ -459,7 +475,7 @@ export async function getAudioStreamUrl(
     errors.push(`InnerTube: ${err.message}`);
   }
 
-  // Method 2: Piped API (deciphers signatures server-side)
+  // Method 3: Piped API (deciphers signatures server-side)
   try {
     const streams = await getStreamFromPipedAPI(videoId);
     const streamUrl = pickBestAudioStream(streams, targetBitrate);
@@ -472,7 +488,7 @@ export async function getAudioStreamUrl(
     errors.push(`Piped API: ${err.message}`);
   }
 
-  // Method 3: Invidious API (also deciphers server-side)
+  // Method 4: Invidious API (also deciphers server-side)
   try {
     const streams = await getStreamFromInvidious(videoId);
     const streamUrl = pickBestAudioStream(streams, targetBitrate);
@@ -485,7 +501,7 @@ export async function getAudioStreamUrl(
     errors.push(`Invidious API: ${err.message}`);
   }
 
-  // Method 4: Scrape YouTube watch page (limited – can't handle ciphered/SABR streams)
+  // Method 5: Scrape YouTube watch page (limited – can't handle ciphered/SABR streams)
   try {
     const streams = await getStreamFromWatchPage(videoId);
     const streamUrl = pickBestAudioStream(streams, targetBitrate);
