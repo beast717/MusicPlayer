@@ -4,9 +4,24 @@ import TrackPlayer, {
   Capability,
   AppKilledPlaybackBehavior,
   State,
+  TrackType,
 } from 'react-native-track-player';
 import { usePlayerStore } from '../stores/playerStore';
-import { getAudioStreamUrl } from './youtube';
+import { ResolvedAudioSource } from '../types';
+import { getAudioPlaybackSource } from './youtube';
+
+function buildTrackPlayerSource(source: ResolvedAudioSource) {
+  return source.streamType === 'hls'
+    ? {
+        url: source.url,
+        type: TrackType.HLS,
+        contentType: source.mimeType,
+      }
+    : {
+        url: source.url,
+        contentType: source.mimeType,
+      };
+}
 
 // This service is registered with TrackPlayer and handles remote events
 export async function PlaybackService() {
@@ -77,13 +92,15 @@ export async function PlaybackService() {
         const storeTrack = storeQueue[nextIndex];
         if (storeTrack && !storeTrack.localFilePath) {
           try {
-            const url = await getAudioStreamUrl(storeTrack.id);
+            const source = buildTrackPlayerSource(
+              await getAudioPlaybackSource(storeTrack.id)
+            );
             // Replace the track with the resolved URL
             await TrackPlayer.remove(nextIndex);
             await TrackPlayer.add(
               {
                 id: storeTrack.id,
-                url,
+                ...source,
                 title: storeTrack.title,
                 artist: storeTrack.artist,
                 artwork:

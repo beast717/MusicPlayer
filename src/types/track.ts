@@ -26,4 +26,11 @@ export interface AudioStream {
   bitrate: number;
   quality: string;
   codec: string;
+  streamType: 'default' | 'hls';
+}
+
+export interface ResolvedAudioSource {
+  url: string;
+  mimeType: string;
+  streamType: 'default' | 'hls';
 }

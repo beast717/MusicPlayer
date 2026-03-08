@@ -1,10 +1,29 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import TrackPlayer, { RepeatMode } from 'react-native-track-player';
-import { Track } from '../types';
-import { getAudioStreamUrl } from '../services/youtube';
+import TrackPlayer, { RepeatMode, TrackType } from 'react-native-track-player';
+import { ResolvedAudioSource, Track } from '../types';
+import { getAudioPlaybackSource } from '../services/youtube';
 import { zustandMMKVStorage } from '../services/storage';
 import { MAX_RECENT_TRACKS } from '../utils/constants';
+
+type PlayerTrackSource = {
+  url: string;
+  type?: TrackType;
+  contentType?: string;
+};
+
+function buildTrackPlayerSource(source: ResolvedAudioSource): PlayerTrackSource {
+  return source.streamType === 'hls'
+    ? {
+        url: source.url,
+        type: TrackType.HLS,
+        contentType: source.mimeType,
+      }
+    : {
+        url: source.url,
+        contentType: source.mimeType,
+      };
+}
 
 export type ShuffleMode = 'off' | 'on';
 export type RepeatModeType = 'off' | 'track' | 'queue';
@@ -57,18 +76,14 @@ export const usePlayerStore = create<PlayerStore>()(
       playTrack: async (track: Track) => {
         set({ isLoading: true, error: null });
         try {
-          let url: string;
-
-          if (track.localFilePath) {
-            url = track.localFilePath;
-          } else {
-            url = await getAudioStreamUrl(track.id);
-          }
+          const source = track.localFilePath
+            ? { url: track.localFilePath }
+            : buildTrackPlayerSource(await getAudioPlaybackSource(track.id));
 
           await TrackPlayer.reset();
           await TrackPlayer.add({
             id: track.id,
-            url,
+            ...source,
             title: track.title,
             artist: track.artist,
             artwork: track.localThumbnailPath || track.thumbnailUrl,
@@ -100,31 +115,29 @@ export const usePlayerStore = create<PlayerStore>()(
 
         try {
           const firstTrack = tracks[startIndex] || tracks[0];
-          let url: string;
-
-          if (firstTrack.localFilePath) {
-            url = firstTrack.localFilePath;
-          } else {
-            url = await getAudioStreamUrl(firstTrack.id);
-          }
+          const firstTrackSource = firstTrack.localFilePath
+            ? { url: firstTrack.localFilePath }
+            : buildTrackPlayerSource(
+                await getAudioPlaybackSource(firstTrack.id)
+              );
 
           await TrackPlayer.reset();
 
           // Add all tracks to the queue
           const trackPlayerTracks = await Promise.all(
             tracks.map(async (track, i) => {
-              let trackUrl: string;
+              let trackSource: PlayerTrackSource;
               if (i === startIndex) {
-                trackUrl = url; // already fetched
+                trackSource = firstTrackSource;
               } else if (track.localFilePath) {
-                trackUrl = track.localFilePath;
+                trackSource = { url: track.localFilePath };
               } else {
                 // Lazy load: use a placeholder, will re-resolve on track change
-                trackUrl = '';
+                trackSource = { url: 'https://placeholder.invalid' };
               }
               return {
                 id: track.id,
-                url: trackUrl || 'https://placeholder.invalid',
+                ...trackSource,
                 title: track.title,
                 artist: track.artist,
                 artwork: track.localThumbnailPath || track.thumbnailUrl,
@@ -161,14 +174,13 @@ export const usePlayerStore = create<PlayerStore>()(
         set({ queue: [...queue, track] });
 
         try {
-          let url = track.localFilePath;
-          if (!url) {
-            url = await getAudioStreamUrl(track.id);
-          }
+          const source = track.localFilePath
+            ? { url: track.localFilePath }
+            : buildTrackPlayerSource(await getAudioPlaybackSource(track.id));
 
           await TrackPlayer.add({
             id: track.id,
-            url: url!,
+            ...source,
             title: track.title,
             artist: track.artist,
             artwork: track.localThumbnailPath || track.thumbnailUrl,

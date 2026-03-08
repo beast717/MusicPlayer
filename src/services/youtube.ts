@@ -1,4 +1,5 @@
-import { SearchResult, AudioStream } from '../types';
+import { Platform } from 'react-native';
+import { SearchResult, AudioStream, ResolvedAudioSource } from '../types';
 import {
   STREAM_URL_TTL,
   AUDIO_QUALITY_BITRATE,
@@ -134,22 +135,99 @@ export async function searchYouTube(
 
 interface CachedStreamUrl {
   url: string;
+  mimeType: string;
+  streamType: 'default' | 'hls';
   timestamp: number;
 }
 
-function getCachedStreamUrl(videoId: string): string | null {
-  const cached = mmkvStorage.getObject<CachedStreamUrl>(`stream_${videoId}`);
+type AudioResolveMode = 'direct' | 'playback';
+
+interface ResolveAudioOptions {
+  allowAdaptiveManifest?: boolean;
+  preferHls?: boolean;
+  cacheMode: AudioResolveMode;
+}
+
+function getCachedAudioSource(
+  videoId: string,
+  mode: AudioResolveMode
+): ResolvedAudioSource | null {
+  const cached = mmkvStorage.getObject<CachedStreamUrl>(
+    `stream_${mode}_${videoId}`
+  );
   if (cached && Date.now() - cached.timestamp < STREAM_URL_TTL) {
-    return cached.url;
+    return {
+      url: cached.url,
+      mimeType: cached.mimeType,
+      streamType: cached.streamType,
+    };
   }
   return null;
 }
 
-function cacheStreamUrl(videoId: string, url: string): void {
-  mmkvStorage.setObject<CachedStreamUrl>(`stream_${videoId}`, {
-    url,
+function cacheAudioSource(
+  videoId: string,
+  mode: AudioResolveMode,
+  source: ResolvedAudioSource
+): void {
+  mmkvStorage.setObject<CachedStreamUrl>(`stream_${mode}_${videoId}`, {
+    url: source.url,
+    mimeType: source.mimeType,
+    streamType: source.streamType,
     timestamp: Date.now(),
   });
+}
+
+function extractAudioStreamsFromStreamingData(
+  streamingData: any,
+  options: Pick<ResolveAudioOptions, 'allowAdaptiveManifest'>
+): AudioStream[] {
+  const { allowAdaptiveManifest = false } = options;
+  const adaptiveFormats = streamingData?.adaptiveFormats || [];
+  const regularFormats = streamingData?.formats || [];
+  const allFormats = [...adaptiveFormats, ...regularFormats];
+
+  const directAudioStreams: AudioStream[] = allFormats
+    .filter((f: any) => (f.mimeType || '').startsWith('audio/'))
+    .map((f: any): AudioStream => {
+      let streamUrl = f.url || '';
+
+      if (!streamUrl && f.signatureCipher) {
+        try {
+          const params = new URLSearchParams(f.signatureCipher);
+          streamUrl = params.get('url') || '';
+        } catch {}
+      }
+
+      return {
+        url: streamUrl,
+        mimeType: (f.mimeType || '').split(';')[0],
+        bitrate: f.bitrate || 0,
+        quality: f.audioQuality || f.quality || '',
+        codec: f.mimeType?.match(/codecs="([^"]+)"/)?.[1] || '',
+        streamType: 'default',
+      };
+    })
+    .filter((stream) => stream.url !== '');
+
+  if (directAudioStreams.length > 0) {
+    return directAudioStreams;
+  }
+
+  if (allowAdaptiveManifest && streamingData?.hlsManifestUrl) {
+    return [
+      {
+        url: streamingData.hlsManifestUrl,
+        mimeType: 'application/x-mpegURL',
+        bitrate: 0,
+        quality: 'hls',
+        codec: 'hls',
+        streamType: 'hls',
+      },
+    ];
+  }
+
+  return [];
 }
 
 /**
@@ -176,7 +254,10 @@ function extractPlayerResponse(html: string): any | null {
   return null;
 }
 
-async function getStreamFromWatchPage(videoId: string): Promise<AudioStream[]> {
+async function getStreamFromWatchPage(
+  videoId: string,
+  allowAdaptiveManifest: boolean
+): Promise<AudioStream[]> {
   const watchUrl = `https://www.youtube.com/watch?v=${videoId}&has_verified=1`;
   const response = await fetchWithTimeout(
     watchUrl,
@@ -210,39 +291,9 @@ async function getStreamFromWatchPage(videoId: string): Promise<AudioStream[]> {
     );
   }
 
-  const adaptiveFormats =
-    playerResponse?.streamingData?.adaptiveFormats || [];
-  const regularFormats =
-    playerResponse?.streamingData?.formats || [];
-  const allFormats = [...adaptiveFormats, ...regularFormats];
-
-  const audioStreams: AudioStream[] = allFormats
-    .filter((f: any) => (f.mimeType || '').startsWith('audio/'))
-    .map((f: any) => {
-      // Some streams have a direct URL, others use signatureCipher
-      let streamUrl = f.url || '';
-
-      // Try to extract URL from signatureCipher (works for non-throttled streams)
-      if (!streamUrl && f.signatureCipher) {
-        try {
-          const params = new URLSearchParams(f.signatureCipher);
-          streamUrl = params.get('url') || '';
-          // Note: ciphered streams need signature decoding, which we can't do
-          // easily client-side. The Piped API fallback handles these.
-        } catch {}
-      }
-
-      return {
-        url: streamUrl,
-        mimeType: (f.mimeType || '').split(';')[0],
-        bitrate: f.bitrate || 0,
-        quality: f.audioQuality || f.quality || '',
-        codec: f.mimeType?.match(/codecs="([^"]+)"/)?.[1] || '',
-      };
-    })
-    .filter((s: AudioStream) => s.url !== '');
-
-  return audioStreams;
+  return extractAudioStreamsFromStreamingData(playerResponse?.streamingData, {
+    allowAdaptiveManifest,
+  });
 }
 
 /**
@@ -253,18 +304,40 @@ interface InnerTubeResult {
   diagnostics: string[];
 }
 
+interface InnerTubeClientConfig {
+  name: string;
+  client: Record<string, string | number>;
+  params?: string;
+}
+
 async function getStreamFromInnerTube(
-  videoId: string
+  videoId: string,
+  allowAdaptiveManifest: boolean
 ): Promise<InnerTubeResult> {
-  const clients = [
+  const clients: InnerTubeClientConfig[] = [
     {
-      clientName: 'ANDROID_VR',
-      clientVersion: '1.60.19',
-      androidSdkVersion: 34,
-      osName: 'Android',
-      osVersion: '14',
-      deviceMake: 'Google',
-      deviceModel: 'Pixel 8',
+      name: 'IOS',
+      client: {
+        clientName: 'IOS',
+        clientVersion: '20.10.4',
+        deviceMake: 'Apple',
+        deviceModel: 'iPhone16,2',
+        osName: 'iPhone',
+        osVersion: '18.3.1',
+      },
+    },
+    {
+      name: 'ANDROID_VR',
+      client: {
+        clientName: 'ANDROID_VR',
+        clientVersion: '1.60.19',
+        androidSdkVersion: 34,
+        osName: 'Android',
+        osVersion: '14',
+        deviceMake: 'Google',
+        deviceModel: 'Pixel 8',
+      },
+      params: 'CgIQBg',
     },
   ];
 
@@ -272,24 +345,29 @@ async function getStreamFromInnerTube(
 
   for (const client of clients) {
     try {
+      const body: Record<string, any> = {
+        context: { client: { ...client.client, hl: 'en', gl: 'US' } },
+        videoId,
+        contentCheckOk: true,
+        racyCheckOk: true,
+      };
+
+      if (client.params) {
+        body.params = client.params;
+      }
+
       const response = await fetchWithTimeout(
         'https://youtubei.googleapis.com/youtubei/v1/player?prettyPrint=false',
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            context: { client: { ...client, hl: 'en', gl: 'US' } },
-            videoId,
-            contentCheckOk: true,
-            racyCheckOk: true,
-            params: 'CgIQBg',
-          }),
+          body: JSON.stringify(body),
         },
         15000
       );
 
       if (!response.ok) {
-        diagnostics.push(`${client.clientName}: HTTP ${response.status}`);
+        diagnostics.push(`${client.name}: HTTP ${response.status}`);
         continue;
       }
 
@@ -298,7 +376,7 @@ async function getStreamFromInnerTube(
       const reason = data.playabilityStatus?.reason || '';
 
       if (status !== 'OK') {
-        diagnostics.push(`${client.clientName}: ${status} ${reason}`.trim());
+        diagnostics.push(`${client.name}: ${status} ${reason}`.trim());
         continue;
       }
 
@@ -307,31 +385,35 @@ async function getStreamFromInnerTube(
         (f: any) => (f.mimeType || '').startsWith('audio/')
       );
       const withUrl = allAudio.filter((f: any) => f.url);
-
-      const audioStreams: AudioStream[] = withUrl.map((f: any) => ({
-        url: f.url,
-        mimeType: (f.mimeType || '').split(';')[0],
-        bitrate: f.bitrate || 0,
-        quality: f.audioQuality || '',
-        codec: f.mimeType?.match(/codecs="([^"]+)"/)?.[1] || '',
-      }));
+      const audioStreams = extractAudioStreamsFromStreamingData(
+        data.streamingData,
+        { allowAdaptiveManifest }
+      );
 
       if (audioStreams.length > 0) {
         return { streams: audioStreams, diagnostics };
       }
 
-      // Diagnostic: why no streams?
       const hasSABR = !!data.streamingData?.serverAbrStreamingUrl;
+      const hasHls = !!data.streamingData?.hlsManifestUrl;
       diagnostics.push(
-        `${client.clientName}: OK but audio=${allAudio.length} withUrl=${withUrl.length} adaptive=${adaptiveFormats.length} sabr=${hasSABR}`
+        `${client.name}: OK but audio=${allAudio.length} withUrl=${withUrl.length} adaptive=${adaptiveFormats.length} hls=${hasHls} sabr=${hasSABR}`
       );
     } catch (err: any) {
-      diagnostics.push(`${client.clientName}: ${err.message}`);
+      diagnostics.push(`${client.name}: ${err.message}`);
       continue;
     }
   }
 
   return { streams: [], diagnostics };
+}
+
+function toResolvedAudioSource(stream: AudioStream): ResolvedAudioSource {
+  return {
+    url: stream.url,
+    mimeType: stream.mimeType,
+    streamType: stream.streamType,
+  };
 }
 
 // ─── Piped API Fallback ─────────────────────────────────────────────
@@ -433,39 +515,31 @@ async function getStreamFromInvidious(
   return [];
 }
 
-export async function getAudioStreamUrl(
+async function resolveAudioSource(
   videoId: string,
-  quality: AudioQuality = 'high'
-): Promise<string> {
-  // Check cache first
-  const cached = getCachedStreamUrl(videoId);
+  quality: AudioQuality,
+  options: ResolveAudioOptions
+): Promise<ResolvedAudioSource> {
+  const { allowAdaptiveManifest = false, preferHls = false, cacheMode } = options;
+
+  const cached = getCachedAudioSource(videoId, cacheMode);
   if (cached) return cached;
 
   const targetBitrate = AUDIO_QUALITY_BITRATE[quality];
   const errors: string[] = [];
 
-  // Method 1: WebView extraction (uses YouTube's own player with BotGuard/PoToken)
+  // Method 1: InnerTube player API (IOS first, ANDROID_VR fallback)
   try {
-    const wvStreams = await extractStreamsViaWebView(videoId);
-    const mp4 = wvStreams.filter(s => s.mimeType.includes('audio/mp4'));
-    const candidates = mp4.length > 0 ? mp4 : wvStreams;
-    candidates.sort((a, b) => Math.abs(a.bitrate - targetBitrate) - Math.abs(b.bitrate - targetBitrate));
-    if (candidates.length > 0 && candidates[0].url) {
-      cacheStreamUrl(videoId, candidates[0].url);
-      return candidates[0].url;
-    }
-    errors.push(`WebView: ${wvStreams.length} streams but no usable URL`);
-  } catch (err: any) {
-    errors.push(`WebView: ${err.message}`);
-  }
-
-  // Method 2: InnerTube player API (ANDROID_VR client – fallback)
-  try {
-    const result = await getStreamFromInnerTube(videoId);
-    const streamUrl = pickBestAudioStream(result.streams, targetBitrate);
-    if (streamUrl) {
-      cacheStreamUrl(videoId, streamUrl);
-      return streamUrl;
+    const result = await getStreamFromInnerTube(videoId, allowAdaptiveManifest);
+    const stream = pickBestAudioStream(
+      result.streams,
+      targetBitrate,
+      preferHls
+    );
+    if (stream) {
+      const source = toResolvedAudioSource(stream);
+      cacheAudioSource(videoId, cacheMode, source);
+      return source;
     }
     const diag = result.diagnostics.length > 0
       ? result.diagnostics.join('; ')
@@ -475,13 +549,33 @@ export async function getAudioStreamUrl(
     errors.push(`InnerTube: ${err.message}`);
   }
 
+  // Method 2: WebView extraction (uses YouTube's own player with BotGuard/PoToken)
+  try {
+    const wvStreams = await extractStreamsViaWebView(videoId);
+    const directStreams: AudioStream[] = wvStreams.map((stream) => ({
+      ...stream,
+      codec: '',
+      streamType: 'default',
+    }));
+    const stream = pickBestAudioStream(directStreams, targetBitrate, false);
+    if (stream) {
+      const source = toResolvedAudioSource(stream);
+      cacheAudioSource(videoId, cacheMode, source);
+      return source;
+    }
+    errors.push(`WebView: ${wvStreams.length} streams but no usable URL`);
+  } catch (err: any) {
+    errors.push(`WebView: ${err.message}`);
+  }
+
   // Method 3: Piped API (deciphers signatures server-side)
   try {
     const streams = await getStreamFromPipedAPI(videoId);
-    const streamUrl = pickBestAudioStream(streams, targetBitrate);
-    if (streamUrl) {
-      cacheStreamUrl(videoId, streamUrl);
-      return streamUrl;
+    const stream = pickBestAudioStream(streams, targetBitrate, false);
+    if (stream) {
+      const source = toResolvedAudioSource(stream);
+      cacheAudioSource(videoId, cacheMode, source);
+      return source;
     }
     errors.push('Piped API: no suitable audio stream found');
   } catch (err: any) {
@@ -491,10 +585,11 @@ export async function getAudioStreamUrl(
   // Method 4: Invidious API (also deciphers server-side)
   try {
     const streams = await getStreamFromInvidious(videoId);
-    const streamUrl = pickBestAudioStream(streams, targetBitrate);
-    if (streamUrl) {
-      cacheStreamUrl(videoId, streamUrl);
-      return streamUrl;
+    const stream = pickBestAudioStream(streams, targetBitrate, false);
+    if (stream) {
+      const source = toResolvedAudioSource(stream);
+      cacheAudioSource(videoId, cacheMode, source);
+      return source;
     }
     errors.push('Invidious API: no suitable audio stream found');
   } catch (err: any) {
@@ -503,11 +598,12 @@ export async function getAudioStreamUrl(
 
   // Method 5: Scrape YouTube watch page (limited – can't handle ciphered/SABR streams)
   try {
-    const streams = await getStreamFromWatchPage(videoId);
-    const streamUrl = pickBestAudioStream(streams, targetBitrate);
-    if (streamUrl) {
-      cacheStreamUrl(videoId, streamUrl);
-      return streamUrl;
+    const streams = await getStreamFromWatchPage(videoId, allowAdaptiveManifest);
+    const stream = pickBestAudioStream(streams, targetBitrate, preferHls);
+    if (stream) {
+      const source = toResolvedAudioSource(stream);
+      cacheAudioSource(videoId, cacheMode, source);
+      return source;
     }
     errors.push('Watch page: no suitable audio stream found');
   } catch (err: any) {
@@ -520,11 +616,42 @@ export async function getAudioStreamUrl(
   );
 }
 
+export async function getAudioPlaybackSource(
+  videoId: string,
+  quality: AudioQuality = 'high'
+): Promise<ResolvedAudioSource> {
+  return resolveAudioSource(videoId, quality, {
+    allowAdaptiveManifest: Platform.OS === 'ios',
+    preferHls: Platform.OS === 'ios',
+    cacheMode: 'playback',
+  });
+}
+
+export async function getAudioStreamUrl(
+  videoId: string,
+  quality: AudioQuality = 'high'
+): Promise<string> {
+  const source = await resolveAudioSource(videoId, quality, {
+    allowAdaptiveManifest: false,
+    preferHls: false,
+    cacheMode: 'direct',
+  });
+  return source.url;
+}
+
 function pickBestAudioStream(
   streams: AudioStream[],
-  targetBitrate: number
-): string | null {
+  targetBitrate: number,
+  preferHls: boolean
+): AudioStream | null {
   if (streams.length === 0) return null;
+
+  if (preferHls) {
+    const hlsStream = streams.find((stream) => stream.streamType === 'hls');
+    if (hlsStream) {
+      return hlsStream;
+    }
+  }
 
   // Prefer mp4/aac for iOS native playback
   const mp4Streams = streams.filter(
@@ -542,7 +669,7 @@ function pickBestAudioStream(
     return aDiff - bDiff;
   });
 
-  return candidates[0]?.url || null;
+  return candidates[0] || null;
 }
 
 // ─── Video Details ──────────────────────────────────────────────────

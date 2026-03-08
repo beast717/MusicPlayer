@@ -261,11 +261,11 @@ export function extractStreamsViaWebView(
     }
 
     const timer = setTimeout(() => {
+      const details = getDiagnostics ? getDiagnostics() : 'diagnostics=unavailable';
       pendingRequest = null;
       if (dismissWebView) {
         dismissWebView();
       }
-      const details = getDiagnostics ? getDiagnostics() : 'diagnostics=unavailable';
       reject(new Error(`WebView timed out (${details})`));
     }, EXTRACT_TIMEOUT);
 
@@ -418,6 +418,7 @@ export function StreamExtractorWebView() {
       return;
     }
 
+    webViewRef.current?.injectJavaScript(INTERCEPT_JS);
     webViewRef.current?.injectJavaScript(TRIGGER_PLAYER_JS);
   }, []);
 
@@ -446,6 +447,7 @@ export function StreamExtractorWebView() {
   return (
     <View style={styles.hidden} pointerEvents="none">
       <WebView
+        key={`${activeRequest.videoId}:${activeRequest.phase}`}
         ref={webViewRef}
         source={source}
         userAgent={EMBED_USER_AGENT}
