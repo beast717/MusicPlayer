@@ -6,21 +6,62 @@ import TrackPlayer, {
   State,
   TrackType,
 } from 'react-native-track-player';
+import { Platform } from 'react-native';
 import { usePlayerStore } from '../stores/playerStore';
 import { ResolvedAudioSource } from '../types';
 import { getAudioPlaybackSource } from './youtube';
 
+const IOS_REMOTE_USER_AGENT =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1';
+
+function getUrlHost(url: string): string {
+  try {
+    return new URL(url).host || 'unknown-host';
+  } catch {
+    return 'invalid-url';
+  }
+}
+
 function buildTrackPlayerSource(source: ResolvedAudioSource) {
-  return source.streamType === 'hls'
-    ? {
-        url: source.url,
-        type: TrackType.HLS,
-        contentType: source.mimeType,
-      }
-    : {
-        url: source.url,
-        contentType: source.mimeType,
-      };
+  const trackSource: {
+    url: string;
+    type?: TrackType;
+    contentType: string;
+    userAgent?: string;
+    streamDebug: string;
+  } = {
+    url: source.url,
+    contentType: source.mimeType,
+    streamDebug: `streamType=${source.streamType} mimeType=${source.mimeType} host=${getUrlHost(source.url)}`,
+  };
+
+  if (Platform.OS === 'ios') {
+    trackSource.userAgent = IOS_REMOTE_USER_AGENT;
+  }
+
+  if (source.streamType === 'hls') {
+    trackSource.type = TrackType.HLS;
+  }
+
+  return trackSource;
+}
+
+function getActiveTrackDebug(activeTrack: any): string {
+  if (!activeTrack) {
+    return '';
+  }
+
+  if (typeof activeTrack.streamDebug === 'string' && activeTrack.streamDebug) {
+    return activeTrack.streamDebug;
+  }
+
+  const parts = [
+    activeTrack.type ? `type=${activeTrack.type}` : '',
+    activeTrack.contentType ? `contentType=${activeTrack.contentType}` : '',
+    activeTrack.url ? `host=${getUrlHost(String(activeTrack.url))}` : '',
+  ].filter(Boolean);
+
+  return parts.join(' ');
 }
 
 // This service is registered with TrackPlayer and handles remote events
@@ -43,11 +84,20 @@ export async function PlaybackService() {
   });
 
   // Handle playback errors (e.g. URL returned 403, unsupported format)
-  TrackPlayer.addEventListener(Event.PlaybackError, (event) => {
+  TrackPlayer.addEventListener(Event.PlaybackError, async (event: any) => {
     const store = usePlayerStore.getState();
-    const msg = event.message || 'Unknown playback error';
-    console.warn('PlaybackError:', event.code, msg);
-    store.setError(`Playback failed: ${msg}`);
+    const msg = event.message || event.error || 'Unknown playback error';
+    let debug = '';
+
+    try {
+      const activeTrack = await TrackPlayer.getActiveTrack();
+      debug = getActiveTrackDebug(activeTrack);
+    } catch {}
+
+    console.warn('PlaybackError:', event.code, msg, debug);
+    store.setError(
+      debug ? `Playback failed: ${msg}\n${debug}` : `Playback failed: ${msg}`
+    );
     store.setIsPlaying(false);
   });
 

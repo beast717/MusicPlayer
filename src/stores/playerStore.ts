@@ -1,28 +1,47 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
+import { Platform } from 'react-native';
 import TrackPlayer, { RepeatMode, TrackType } from 'react-native-track-player';
 import { ResolvedAudioSource, Track } from '../types';
 import { getAudioPlaybackSource } from '../services/youtube';
 import { zustandMMKVStorage } from '../services/storage';
 import { MAX_RECENT_TRACKS } from '../utils/constants';
 
+const IOS_REMOTE_USER_AGENT =
+  'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1';
+
 type PlayerTrackSource = {
   url: string;
   type?: TrackType;
   contentType?: string;
+  userAgent?: string;
+  streamDebug?: string;
 };
 
+function getUrlHost(url: string): string {
+  try {
+    return new URL(url).host || 'unknown-host';
+  } catch {
+    return 'invalid-url';
+  }
+}
+
 function buildTrackPlayerSource(source: ResolvedAudioSource): PlayerTrackSource {
-  return source.streamType === 'hls'
-    ? {
-        url: source.url,
-        type: TrackType.HLS,
-        contentType: source.mimeType,
-      }
-    : {
-        url: source.url,
-        contentType: source.mimeType,
-      };
+  const baseSource: PlayerTrackSource = {
+    url: source.url,
+    contentType: source.mimeType,
+    streamDebug: `streamType=${source.streamType} mimeType=${source.mimeType} host=${getUrlHost(source.url)}`,
+  };
+
+  if (Platform.OS === 'ios') {
+    baseSource.userAgent = IOS_REMOTE_USER_AGENT;
+  }
+
+  if (source.streamType === 'hls') {
+    baseSource.type = TrackType.HLS;
+  }
+
+  return baseSource;
 }
 
 export type ShuffleMode = 'off' | 'on';

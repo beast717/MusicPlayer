@@ -140,7 +140,7 @@ interface CachedStreamUrl {
   timestamp: number;
 }
 
-const STREAM_SOURCE_CACHE_VERSION = 'v3';
+const STREAM_SOURCE_CACHE_VERSION = 'v4';
 
 type AudioResolveMode = 'direct' | 'playback';
 
@@ -215,24 +215,19 @@ function extractAudioStreamsFromStreamingData(
     })
     .filter((stream) => stream.url !== '');
 
-  if (directAudioStreams.length > 0) {
-    return directAudioStreams;
-  }
-
+  const streams = [...directAudioStreams];
   if (allowAdaptiveManifest && streamingData?.hlsManifestUrl) {
-    return [
-      {
-        url: streamingData.hlsManifestUrl,
-        mimeType: 'application/x-mpegURL',
-        bitrate: 0,
-        quality: 'hls',
-        codec: 'hls',
-        streamType: 'hls',
-      },
-    ];
+    streams.push({
+      url: streamingData.hlsManifestUrl,
+      mimeType: 'application/x-mpegURL',
+      bitrate: 0,
+      quality: 'hls',
+      codec: 'hls',
+      streamType: 'hls',
+    });
   }
 
-  return [];
+  return streams;
 }
 
 /**
@@ -652,21 +647,34 @@ function pickBestAudioStream(
 ): AudioStream | null {
   if (streams.length === 0) return null;
 
-  if (preferHls) {
-    const hlsStream = streams.find((stream) => stream.streamType === 'hls');
-    if (hlsStream) {
-      return hlsStream;
-    }
-  }
+  const directStreams = streams.filter((stream) => stream.streamType !== 'hls');
+  const hlsStream = streams.find((stream) => stream.streamType === 'hls');
 
   // Prefer mp4/aac for iOS native playback
-  const mp4Streams = streams.filter(
+  const mp4Streams = directStreams.filter(
     (s) =>
       s.mimeType.includes('audio/mp4') || s.mimeType.includes('audio/m4a')
   );
 
+  if (mp4Streams.length > 0) {
+    mp4Streams.sort((a, b) => {
+      const aDiff = Math.abs(a.bitrate - targetBitrate);
+      const bDiff = Math.abs(b.bitrate - targetBitrate);
+      return aDiff - bDiff;
+    });
+    return mp4Streams[0] || null;
+  }
+
+  if (preferHls && hlsStream) {
+    return hlsStream;
+  }
+
+  if (hlsStream) {
+    return hlsStream;
+  }
+
   // If no mp4, fall back to webm/opus
-  const candidates = mp4Streams.length > 0 ? mp4Streams : streams;
+  const candidates = directStreams;
 
   // Sort by how close the bitrate is to target
   candidates.sort((a, b) => {
