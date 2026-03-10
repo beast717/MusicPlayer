@@ -420,11 +420,13 @@ function toResolvedAudioSource(stream: AudioStream): ResolvedAudioSource {
 const PIPED_API_INSTANCES = [
   'https://pipedapi.kavin.rocks',
   'https://pipedapi.adminforge.de',
-  'https://pipedapi.in.projectsegfau.lt',
   'https://pipedapi.r4fo.com',
-  'https://pipedapi.leptons.xyz',
   'https://pipedapi.moomoo.me',
-  'https://pipedapi.drgns.space',
+  'https://api-piped.mha.fi',
+  'https://pipedapi.rivo.lol',
+  'https://pipedapi.syncpundit.io',
+  'https://pipedapi.in.projectsegfau.lt',
+  'https://pipedapi.leptons.xyz',
 ];
 
 // ─── Invidious API Fallback ─────────────────────────────────────────
@@ -435,6 +437,8 @@ const INVIDIOUS_INSTANCES = [
   'https://vid.puffyan.us',
   'https://invidious.nerdvpn.de',
   'https://inv.tux.pizza',
+  'https://invidious.privacyredirect.com',
+  'https://iv.ggtyler.dev',
 ];
 
 async function getStreamFromPipedAPI(
@@ -539,27 +543,37 @@ async function resolveAudioSource(
   const targetBitrate = AUDIO_QUALITY_BITRATE[quality];
   const errors: string[] = [];
 
-  // WebView first — it runs YouTube's real player with BotGuard/PoToken,
-  // producing authenticated URLs that the CDN actually serves.
+  // 1. Piped API — proxied URLs that bypass YouTube CDN restrictions entirely.
+  //    Most reliable for iOS since AVPlayer loads from the Piped proxy server.
   try {
-    const wvStreams = await extractStreamsViaWebView(videoId);
-    const directStreams: AudioStream[] = wvStreams.map((stream) => ({
-      ...stream,
-      codec: '',
-      streamType: 'default',
-    }));
-    const stream = pickBestAudioStream(directStreams, targetBitrate, false);
+    const streams = await getStreamFromPipedAPI(videoId);
+    const stream = pickBestAudioStream(streams, targetBitrate, false);
     if (stream) {
       const source = toResolvedAudioSource(stream);
       cacheAudioSource(videoId, cacheMode, source);
       return source;
     }
-    errors.push(`WebView: ${wvStreams.length} streams but no usable URL`);
+    errors.push('Piped API: no suitable audio stream found');
   } catch (err: any) {
-    errors.push(`WebView: ${err.message}`);
+    errors.push(`Piped API: ${err.message}`);
   }
 
-  // InnerTube player API (IOS client identity, ANDROID_VR fallback)
+  // 2. Invidious API — also proxied, another reliable source.
+  try {
+    const streams = await getStreamFromInvidious(videoId);
+    const stream = pickBestAudioStream(streams, targetBitrate, false);
+    if (stream) {
+      const source = toResolvedAudioSource(stream);
+      cacheAudioSource(videoId, cacheMode, source);
+      return source;
+    }
+    errors.push('Invidious API: no suitable audio stream found');
+  } catch (err: any) {
+    errors.push(`Invidious API: ${err.message}`);
+  }
+
+  // 3. InnerTube player API — prefer HLS manifest for iOS (AVPlayer handles
+  //    HLS natively and YouTube serves it reliably for the IOS client identity).
   try {
     const result = await getStreamFromInnerTube(videoId, allowAdaptiveManifest);
     const stream = pickBestAudioStream(
@@ -580,35 +594,26 @@ async function resolveAudioSource(
     errors.push(`InnerTube: ${err.message}`);
   }
 
-  // Piped API (deciphers signatures server-side)
+  // 4. WebView extraction — runs YouTube's real player with BotGuard/PoToken.
   try {
-    const streams = await getStreamFromPipedAPI(videoId);
-    const stream = pickBestAudioStream(streams, targetBitrate, false);
+    const wvStreams = await extractStreamsViaWebView(videoId);
+    const directStreams: AudioStream[] = wvStreams.map((stream) => ({
+      ...stream,
+      codec: '',
+      streamType: 'default',
+    }));
+    const stream = pickBestAudioStream(directStreams, targetBitrate, false);
     if (stream) {
       const source = toResolvedAudioSource(stream);
       cacheAudioSource(videoId, cacheMode, source);
       return source;
     }
-    errors.push('Piped API: no suitable audio stream found');
+    errors.push(`WebView: ${wvStreams.length} streams but no usable URL`);
   } catch (err: any) {
-    errors.push(`Piped API: ${err.message}`);
+    errors.push(`WebView: ${err.message}`);
   }
 
-  // Invidious API (also deciphers server-side)
-  try {
-    const streams = await getStreamFromInvidious(videoId);
-    const stream = pickBestAudioStream(streams, targetBitrate, false);
-    if (stream) {
-      const source = toResolvedAudioSource(stream);
-      cacheAudioSource(videoId, cacheMode, source);
-      return source;
-    }
-    errors.push('Invidious API: no suitable audio stream found');
-  } catch (err: any) {
-    errors.push(`Invidious API: ${err.message}`);
-  }
-
-  // Watch page scraping (limited – can't handle ciphered/SABR streams)
+  // 5. Watch page scraping (limited – can't handle ciphered/SABR streams)
   try {
     const streams = await getStreamFromWatchPage(videoId, allowAdaptiveManifest);
     const stream = pickBestAudioStream(streams, targetBitrate, preferHls);
@@ -634,8 +639,9 @@ export async function getAudioPlaybackSource(
 ): Promise<ResolvedAudioSource> {
   return resolveAudioSource(videoId, quality, {
     allowAdaptiveManifest: true,
-    // Prefer direct audio when YouTube exposes it; HLS stays as a fallback.
-    preferHls: false,
+    // Prefer HLS: AVPlayer handles it natively and YouTube serves it reliably.
+    // Direct mp4 URLs from YouTube CDN often get blocked without a PoToken.
+    preferHls: true,
     cacheMode: 'playback',
   });
 }
@@ -662,7 +668,13 @@ function pickBestAudioStream(
   const directStreams = streams.filter((stream) => stream.streamType !== 'hls');
   const hlsStream = streams.find((stream) => stream.streamType === 'hls');
 
-  // Prefer mp4/aac for iOS native playback
+  // When preferHls is set, use HLS first — AVPlayer handles it natively
+  // and YouTube's HLS manifests don't require PoToken authentication.
+  if (preferHls && hlsStream) {
+    return hlsStream;
+  }
+
+  // Try mp4/aac direct streams (best quality for iOS native playback)
   const mp4Streams = directStreams.filter(
     (s) =>
       s.mimeType.includes('audio/mp4') || s.mimeType.includes('audio/m4a')
@@ -677,18 +689,13 @@ function pickBestAudioStream(
     return mp4Streams[0] || null;
   }
 
-  if (preferHls && hlsStream) {
-    return hlsStream;
-  }
-
+  // Fall back to HLS even when not preferred
   if (hlsStream) {
     return hlsStream;
   }
 
-  // If no mp4, fall back to webm/opus
+  // Last resort: webm/opus or any remaining format
   const candidates = directStreams;
-
-  // Sort by how close the bitrate is to target
   candidates.sort((a, b) => {
     const aDiff = Math.abs(a.bitrate - targetBitrate);
     const bDiff = Math.abs(b.bitrate - targetBitrate);
