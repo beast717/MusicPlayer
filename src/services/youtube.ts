@@ -441,10 +441,44 @@ const INVIDIOUS_INSTANCES = [
   'https://iv.ggtyler.dev',
 ];
 
+// ─── Instance Health Tracking ───────────────────────────────────────
+// Remember which instances responded recently so we try them first
+// instead of wasting 12s per dead instance.
+
+const INSTANCE_HEALTH_TTL = 10 * 60 * 1000; // 10 minutes
+
+const instanceHealth = new Map<string, { ok: boolean; timestamp: number }>();
+
+function recordInstanceHealth(instance: string, ok: boolean): void {
+  instanceHealth.set(instance, { ok, timestamp: Date.now() });
+}
+
+function sortByHealth(instances: string[]): string[] {
+  const now = Date.now();
+  return [...instances].sort((a, b) => {
+    const healthA = instanceHealth.get(a);
+    const healthB = instanceHealth.get(b);
+
+    const aHealthy =
+      healthA && now - healthA.timestamp < INSTANCE_HEALTH_TTL
+        ? healthA.ok
+        : null;
+    const bHealthy =
+      healthB && now - healthB.timestamp < INSTANCE_HEALTH_TTL
+        ? healthB.ok
+        : null;
+
+    // Known-healthy first, unknown middle, known-dead last
+    const scoreA = aHealthy === true ? 0 : aHealthy === null ? 1 : 2;
+    const scoreB = bHealthy === true ? 0 : bHealthy === null ? 1 : 2;
+    return scoreA - scoreB;
+  });
+}
+
 async function getStreamFromPipedAPI(
   videoId: string
 ): Promise<AudioStream[]> {
-  for (const instance of PIPED_API_INSTANCES) {
+  for (const instance of sortByHealth(PIPED_API_INSTANCES)) {
     try {
       const response = await fetchWithTimeout(
         `${instance}/streams/${videoId}`,
@@ -456,7 +490,10 @@ async function getStreamFromPipedAPI(
         12000
       );
 
-      if (!response.ok) continue;
+      if (!response.ok) {
+        recordInstanceHealth(instance, false);
+        continue;
+      }
 
       const data = await response.json();
       const audioStreams: AudioStream[] = (data.audioStreams || [])
@@ -469,8 +506,12 @@ async function getStreamFromPipedAPI(
           codec: s.codec || '',
         }));
 
-      if (audioStreams.length > 0) return audioStreams;
+      if (audioStreams.length > 0) {
+        recordInstanceHealth(instance, true);
+        return audioStreams;
+      }
     } catch {
+      recordInstanceHealth(instance, false);
       continue;
     }
   }
@@ -481,7 +522,7 @@ async function getStreamFromPipedAPI(
 async function getStreamFromInvidious(
   videoId: string
 ): Promise<AudioStream[]> {
-  for (const instance of INVIDIOUS_INSTANCES) {
+  for (const instance of sortByHealth(INVIDIOUS_INSTANCES)) {
     try {
       const response = await fetchWithTimeout(
         `${instance}/api/v1/videos/${videoId}`,
@@ -493,7 +534,10 @@ async function getStreamFromInvidious(
         12000
       );
 
-      if (!response.ok) continue;
+      if (!response.ok) {
+        recordInstanceHealth(instance, false);
+        continue;
+      }
 
       const data = await response.json();
       const allFormats = data.adaptiveFormats || [];
@@ -509,8 +553,12 @@ async function getStreamFromInvidious(
         }))
         .filter((s: AudioStream) => s.url !== '');
 
-      if (audioStreams.length > 0) return audioStreams;
+      if (audioStreams.length > 0) {
+        recordInstanceHealth(instance, true);
+        return audioStreams;
+      }
     } catch {
+      recordInstanceHealth(instance, false);
       continue;
     }
   }
