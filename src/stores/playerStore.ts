@@ -93,7 +93,7 @@ export const usePlayerStore = create<PlayerStore>()(
 
       // Actions
       playTrack: async (track: Track) => {
-        set({ isLoading: true, error: null });
+        set({ isLoading: true, error: null, queue: [track] });
         try {
           const source = track.localFilePath
             ? { url: track.localFilePath }

@@ -206,8 +206,9 @@ export function Navigation() {
       <Modal
         visible={playerVisible}
         animationType="slide"
-        presentationStyle="fullScreen"
+        presentationStyle="pageSheet"
         onRequestClose={() => setPlayerVisible(false)}
+        onDismiss={() => setPlayerVisible(false)}
       >
         <PlayerScreen onDismiss={() => setPlayerVisible(false)} />
       </Modal>
