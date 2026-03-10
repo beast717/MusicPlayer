@@ -9,10 +9,13 @@ import TrackPlayer, {
 import { Platform } from 'react-native';
 import { usePlayerStore } from '../stores/playerStore';
 import { ResolvedAudioSource } from '../types';
-import { getAudioPlaybackSource } from './youtube';
+import { getAudioPlaybackSource, invalidateStreamCache } from './youtube';
 
 const IOS_REMOTE_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1';
+
+/** Track IDs that have already been retried once to avoid infinite retry loops. */
+const retriedTrackIds = new Set<string>();
 
 function getUrlHost(url: string): string {
   try {
@@ -83,18 +86,63 @@ export async function PlaybackService() {
     await TrackPlayer.seekTo(Math.max(0, position - event.interval));
   });
 
-  // Handle playback errors (e.g. URL returned 403, unsupported format)
+  // Handle playback errors with automatic retry.
+  // When YouTube's CDN rejects a stream URL (e.g. 403 due to missing PoToken),
+  // we invalidate the cached URL, re-resolve the stream, and retry once.
   TrackPlayer.addEventListener(Event.PlaybackError, async (event: any) => {
     const store = usePlayerStore.getState();
     const msg = event.message || event.error || 'Unknown playback error';
     let debug = '';
+    let activeTrackId: string | undefined;
 
     try {
       const activeTrack = await TrackPlayer.getActiveTrack();
       debug = getActiveTrackDebug(activeTrack);
+      activeTrackId = activeTrack?.id as string | undefined;
     } catch {}
 
     console.warn('PlaybackError:', event.code, msg, debug);
+
+    // Attempt automatic retry once per track
+    if (activeTrackId && !retriedTrackIds.has(activeTrackId)) {
+      retriedTrackIds.add(activeTrackId);
+      console.log(`Retrying playback for ${activeTrackId} with fresh stream URL...`);
+
+      try {
+        // Bust the cached (broken) URL so resolveAudioSource fetches fresh
+        invalidateStreamCache(activeTrackId);
+
+        const freshSource = buildTrackPlayerSource(
+          await getAudioPlaybackSource(activeTrackId)
+        );
+        const currentTrack = store.currentTrack;
+        const activeIndex = await TrackPlayer.getActiveTrackIndex();
+
+        if (activeIndex != null) {
+          await TrackPlayer.remove(activeIndex);
+          await TrackPlayer.add(
+            {
+              id: activeTrackId,
+              ...freshSource,
+              title: currentTrack?.title ?? '',
+              artist: currentTrack?.artist ?? '',
+              artwork: currentTrack?.localThumbnailPath || currentTrack?.thumbnailUrl || '',
+              duration: currentTrack?.duration ?? 0,
+            },
+            activeIndex
+          );
+          await TrackPlayer.skip(activeIndex);
+          await TrackPlayer.play();
+          store.setIsPlaying(true);
+          store.setError(null);
+          return; // Retry succeeded – don't show an error
+        }
+      } catch (retryErr: any) {
+        console.warn('Retry failed:', retryErr.message);
+        // Fall through to show the original error
+      }
+    }
+
     store.setError(
       debug ? `Playback failed: ${msg}\n${debug}` : `Playback failed: ${msg}`
     );
@@ -129,7 +177,12 @@ export async function PlaybackService() {
       // Update current track in store
       const storeQueue = store.queue;
       if (nextIndex < storeQueue.length) {
-        store.setCurrentTrack(storeQueue[nextIndex]);
+        const nextTrack = storeQueue[nextIndex];
+        store.setCurrentTrack(nextTrack);
+        // Allow retry for this track if it fails in a future play attempt
+        if (nextTrack) {
+          retriedTrackIds.delete(nextTrack.id);
+        }
       }
 
       // If the track URL is a placeholder, resolve it now

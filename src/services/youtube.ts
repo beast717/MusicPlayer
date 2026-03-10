@@ -1,4 +1,3 @@
-import { Platform } from 'react-native';
 import { SearchResult, AudioStream, ResolvedAudioSource } from '../types';
 import {
   STREAM_URL_TTL,
@@ -515,6 +514,18 @@ async function getStreamFromInvidious(
   return [];
 }
 
+/**
+ * Invalidate the cached stream URL for a video so the next resolve
+ * will re-fetch from the server.  Called after a playback error.
+ */
+export function invalidateStreamCache(videoId: string): void {
+  const modes: AudioResolveMode[] = ['direct', 'playback'];
+  for (const mode of modes) {
+    const key = `stream_${STREAM_SOURCE_CACHE_VERSION}_${mode}_${videoId}`;
+    mmkvStorage.delete(key);
+  }
+}
+
 async function resolveAudioSource(
   videoId: string,
   quality: AudioQuality,
@@ -528,7 +539,27 @@ async function resolveAudioSource(
   const targetBitrate = AUDIO_QUALITY_BITRATE[quality];
   const errors: string[] = [];
 
-  // Method 1: InnerTube player API (IOS first, ANDROID_VR fallback)
+  // WebView first — it runs YouTube's real player with BotGuard/PoToken,
+  // producing authenticated URLs that the CDN actually serves.
+  try {
+    const wvStreams = await extractStreamsViaWebView(videoId);
+    const directStreams: AudioStream[] = wvStreams.map((stream) => ({
+      ...stream,
+      codec: '',
+      streamType: 'default',
+    }));
+    const stream = pickBestAudioStream(directStreams, targetBitrate, false);
+    if (stream) {
+      const source = toResolvedAudioSource(stream);
+      cacheAudioSource(videoId, cacheMode, source);
+      return source;
+    }
+    errors.push(`WebView: ${wvStreams.length} streams but no usable URL`);
+  } catch (err: any) {
+    errors.push(`WebView: ${err.message}`);
+  }
+
+  // InnerTube player API (IOS client identity, ANDROID_VR fallback)
   try {
     const result = await getStreamFromInnerTube(videoId, allowAdaptiveManifest);
     const stream = pickBestAudioStream(
@@ -549,26 +580,7 @@ async function resolveAudioSource(
     errors.push(`InnerTube: ${err.message}`);
   }
 
-  // Method 2: WebView extraction (uses YouTube's own player with BotGuard/PoToken)
-  try {
-    const wvStreams = await extractStreamsViaWebView(videoId);
-    const directStreams: AudioStream[] = wvStreams.map((stream) => ({
-      ...stream,
-      codec: '',
-      streamType: 'default',
-    }));
-    const stream = pickBestAudioStream(directStreams, targetBitrate, false);
-    if (stream) {
-      const source = toResolvedAudioSource(stream);
-      cacheAudioSource(videoId, cacheMode, source);
-      return source;
-    }
-    errors.push(`WebView: ${wvStreams.length} streams but no usable URL`);
-  } catch (err: any) {
-    errors.push(`WebView: ${err.message}`);
-  }
-
-  // Method 3: Piped API (deciphers signatures server-side)
+  // Piped API (deciphers signatures server-side)
   try {
     const streams = await getStreamFromPipedAPI(videoId);
     const stream = pickBestAudioStream(streams, targetBitrate, false);
@@ -582,7 +594,7 @@ async function resolveAudioSource(
     errors.push(`Piped API: ${err.message}`);
   }
 
-  // Method 4: Invidious API (also deciphers server-side)
+  // Invidious API (also deciphers server-side)
   try {
     const streams = await getStreamFromInvidious(videoId);
     const stream = pickBestAudioStream(streams, targetBitrate, false);
@@ -596,7 +608,7 @@ async function resolveAudioSource(
     errors.push(`Invidious API: ${err.message}`);
   }
 
-  // Method 5: Scrape YouTube watch page (limited – can't handle ciphered/SABR streams)
+  // Watch page scraping (limited – can't handle ciphered/SABR streams)
   try {
     const streams = await getStreamFromWatchPage(videoId, allowAdaptiveManifest);
     const stream = pickBestAudioStream(streams, targetBitrate, preferHls);
@@ -621,7 +633,7 @@ export async function getAudioPlaybackSource(
   quality: AudioQuality = 'high'
 ): Promise<ResolvedAudioSource> {
   return resolveAudioSource(videoId, quality, {
-    allowAdaptiveManifest: Platform.OS === 'ios',
+    allowAdaptiveManifest: true,
     // Prefer direct audio when YouTube exposes it; HLS stays as a fallback.
     preferHls: false,
     cacheMode: 'playback',
