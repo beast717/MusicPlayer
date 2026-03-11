@@ -244,7 +244,7 @@ export function HomeScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
-            {favorites.slice(0, 5).map((track, index) => (
+            {favorites.slice(0, 10).map((track, index) => (
               <TrackItem
                 key={track.id}
                 track={track}

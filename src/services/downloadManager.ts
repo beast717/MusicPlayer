@@ -56,11 +56,25 @@ export async function downloadTrack(
     }
   );
 
-  await downloadResumable.downloadAsync();
+  const downloadResult = await downloadResumable.downloadAsync();
+
+  // Validate the download actually produced a real audio file
+  if (downloadResult) {
+    const fileInfo = await FileSystem.getInfoAsync(filePath);
+    if (!fileInfo.exists || !('size' in fileInfo) || (fileInfo.size ?? 0) < 10000) {
+      // File is missing or too small (likely an error page, not audio)
+      try { await FileSystem.deleteAsync(filePath, { idempotent: true }); } catch {}
+      throw new Error('Download failed: file is empty or invalid');
+    }
+  } else {
+    throw new Error('Download failed: no response from server');
+  }
 
   // Download thumbnail
   try {
-    await FileSystem.downloadAsync(track.thumbnailUrl, thumbnailPath);
+    if (track.thumbnailUrl) {
+      await FileSystem.downloadAsync(track.thumbnailUrl, thumbnailPath);
+    }
   } catch (err) {
     console.warn('Failed to download thumbnail:', err);
   }

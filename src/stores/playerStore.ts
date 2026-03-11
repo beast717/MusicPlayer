@@ -98,6 +98,7 @@ export const usePlayerStore = create<PlayerStore>()(
           if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.play();
+          await TrackPlayer.seekTo(0);
 
           // Add to recently played
           const recent = get().recentlyPlayed.filter((t) => t.id !== track.id);
@@ -176,6 +177,7 @@ export const usePlayerStore = create<PlayerStore>()(
             await TrackPlayer.skip(startIndex);
           }
           await TrackPlayer.play();
+          await TrackPlayer.seekTo(0);
 
           const recent = get().recentlyPlayed.filter((t) => t.id !== firstTrack.id);
           recent.unshift(firstTrack);
