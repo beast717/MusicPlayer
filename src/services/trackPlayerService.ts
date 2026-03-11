@@ -5,7 +5,7 @@ import TrackPlayer, {
   AppKilledPlaybackBehavior,
   State,
 } from 'react-native-track-player';
-import { usePlayerStore } from '../stores/playerStore';
+import { usePlayerStore, getSwitchingTrackId } from '../stores/playerStore';
 import { getAudioPlaybackSource, invalidateStreamCache } from './youtube';
 import {
   buildTrackPlayerSource,
@@ -14,6 +14,9 @@ import {
 
 /** Track IDs that have already been retried once to avoid infinite retry loops. */
 const retriedTrackIds = new Set<string>();
+
+/** Index currently being resolved for lazy-load; prevents re-entrant cascading. */
+let _resolvingIndex: number | null = null;
 
 // This service is registered with TrackPlayer and handles remote events
 export async function PlaybackService() {
@@ -117,10 +120,19 @@ export async function PlaybackService() {
   TrackPlayer.addEventListener(
     Event.PlaybackActiveTrackChanged,
     async (event) => {
-      const store = usePlayerStore.getState();
       const { index: nextIndex } = event;
 
       if (nextIndex == null) return;
+
+      // If this event was triggered by our own lazy-load resolve cycle
+      // (remove/add/skip), ignore it to prevent cascading re-entrancy.
+      if (_resolvingIndex === nextIndex) return;
+
+      // If playTrack/playQueue is actively switching, it will set
+      // currentTrack itself — don't fight with it.
+      if (getSwitchingTrackId() != null) return;
+
+      const store = usePlayerStore.getState();
 
       // Update current track in store
       const storeQueue = store.queue;
@@ -142,6 +154,7 @@ export async function PlaybackService() {
       ) {
         const storeTrack = storeQueue[nextIndex];
         if (storeTrack && !storeTrack.localFilePath) {
+          _resolvingIndex = nextIndex;
           try {
             const source = buildTrackPlayerSource(
               await getAudioPlaybackSource(storeTrack.id)
@@ -166,6 +179,8 @@ export async function PlaybackService() {
             const message =
               err instanceof Error ? err.message : 'Failed to resolve stream';
             store.setError(message);
+          } finally {
+            _resolvingIndex = null;
           }
         }
       }
