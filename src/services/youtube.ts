@@ -478,7 +478,7 @@ function sortByHealth(instances: string[]): string[] {
 async function getStreamFromPipedAPI(
   videoId: string
 ): Promise<AudioStream[]> {
-  for (const instance of sortByHealth(PIPED_API_INSTANCES)) {
+  for (const instance of sortByHealth(PIPED_API_INSTANCES).slice(0, 3)) {
     try {
       const response = await fetchWithTimeout(
         `${instance}/streams/${videoId}`,
@@ -487,7 +487,7 @@ async function getStreamFromPipedAPI(
             Accept: 'application/json',
           },
         },
-        12000
+        6000
       );
 
       if (!response.ok) {
@@ -522,7 +522,7 @@ async function getStreamFromPipedAPI(
 async function getStreamFromInvidious(
   videoId: string
 ): Promise<AudioStream[]> {
-  for (const instance of sortByHealth(INVIDIOUS_INSTANCES)) {
+  for (const instance of sortByHealth(INVIDIOUS_INSTANCES).slice(0, 3)) {
     try {
       const response = await fetchWithTimeout(
         `${instance}/api/v1/videos/${videoId}`,
@@ -531,7 +531,7 @@ async function getStreamFromInvidious(
             Accept: 'application/json',
           },
         },
-        12000
+        6000
       );
 
       if (!response.ok) {
@@ -591,89 +591,85 @@ async function resolveAudioSource(
   const targetBitrate = AUDIO_QUALITY_BITRATE[quality];
   const errors: string[] = [];
 
-  // 1. Piped API — proxied URLs that bypass YouTube CDN restrictions entirely.
-  //    Most reliable for iOS since AVPlayer loads from the Piped proxy server.
-  try {
-    const streams = await getStreamFromPipedAPI(videoId);
-    const stream = pickBestAudioStream(streams, targetBitrate, false);
-    if (stream) {
-      const source = toResolvedAudioSource(stream);
-      cacheAudioSource(videoId, cacheMode, source);
-      return source;
+  // Helper: attempt a stream source, returning null on failure
+  const trySource = async (
+    name: string,
+    fn: () => Promise<AudioStream[]>,
+    usePreferHls = false
+  ): Promise<ResolvedAudioSource | null> => {
+    try {
+      const streams = await fn();
+      const stream = pickBestAudioStream(streams, targetBitrate, usePreferHls);
+      if (stream) {
+        const source = toResolvedAudioSource(stream);
+        cacheAudioSource(videoId, cacheMode, source);
+        return source;
+      }
+      errors.push(`${name}: no suitable audio stream found`);
+    } catch (err: any) {
+      errors.push(`${name}: ${err.message}`);
     }
-    errors.push('Piped API: no suitable audio stream found');
-  } catch (err: any) {
-    errors.push(`Piped API: ${err.message}`);
-  }
+    return null;
+  };
 
-  // 2. Invidious API — also proxied, another reliable source.
-  try {
-    const streams = await getStreamFromInvidious(videoId);
-    const stream = pickBestAudioStream(streams, targetBitrate, false);
-    if (stream) {
-      const source = toResolvedAudioSource(stream);
-      cacheAudioSource(videoId, cacheMode, source);
-      return source;
-    }
-    errors.push('Invidious API: no suitable audio stream found');
-  } catch (err: any) {
-    errors.push(`Invidious API: ${err.message}`);
-  }
+  // ── Phase 1: Race Piped, Invidious, and InnerTube in parallel ─────
+  // Whichever returns a valid stream first wins immediately.
+  const phase1Result = await new Promise<ResolvedAudioSource | null>(
+    (resolve) => {
+      let settled = false;
+      let pending = 3;
 
-  // 3. InnerTube player API — prefer HLS manifest for iOS (AVPlayer handles
-  //    HLS natively and YouTube serves it reliably for the IOS client identity).
-  try {
-    const result = await getStreamFromInnerTube(videoId, allowAdaptiveManifest);
-    const stream = pickBestAudioStream(
-      result.streams,
-      targetBitrate,
-      preferHls
-    );
-    if (stream) {
-      const source = toResolvedAudioSource(stream);
-      cacheAudioSource(videoId, cacheMode, source);
-      return source;
+      const onResult = (source: ResolvedAudioSource | null) => {
+        if (settled) return;
+        if (source) {
+          settled = true;
+          resolve(source);
+        } else {
+          pending--;
+          if (pending === 0) {
+            resolve(null);
+          }
+        }
+      };
+
+      trySource('Piped API', () => getStreamFromPipedAPI(videoId)).then(onResult);
+      trySource('Invidious API', () => getStreamFromInvidious(videoId)).then(onResult);
+      trySource(
+        'InnerTube',
+        async () => {
+          const result = await getStreamFromInnerTube(videoId, allowAdaptiveManifest);
+          if (result.streams.length === 0 && result.diagnostics.length > 0) {
+            throw new Error(result.diagnostics.join('; '));
+          }
+          return result.streams;
+        },
+        preferHls
+      ).then(onResult);
     }
-    const diag = result.diagnostics.length > 0
-      ? result.diagnostics.join('; ')
-      : `streams=${result.streams.length}`;
-    errors.push(`InnerTube: ${diag}`);
-  } catch (err: any) {
-    errors.push(`InnerTube: ${err.message}`);
-  }
+  );
+
+  if (phase1Result) return phase1Result;
+
+  // ── Phase 2: Sequential fallbacks (heavier methods) ───────────────
 
   // 4. WebView extraction — runs YouTube's real player with BotGuard/PoToken.
-  try {
+  const webViewResult = await trySource('WebView', async () => {
     const wvStreams = await extractStreamsViaWebView(videoId);
-    const directStreams: AudioStream[] = wvStreams.map((stream) => ({
+    return wvStreams.map((stream) => ({
       ...stream,
       codec: '',
-      streamType: 'default',
+      streamType: 'default' as const,
     }));
-    const stream = pickBestAudioStream(directStreams, targetBitrate, false);
-    if (stream) {
-      const source = toResolvedAudioSource(stream);
-      cacheAudioSource(videoId, cacheMode, source);
-      return source;
-    }
-    errors.push(`WebView: ${wvStreams.length} streams but no usable URL`);
-  } catch (err: any) {
-    errors.push(`WebView: ${err.message}`);
-  }
+  });
+  if (webViewResult) return webViewResult;
 
   // 5. Watch page scraping (limited – can't handle ciphered/SABR streams)
-  try {
-    const streams = await getStreamFromWatchPage(videoId, allowAdaptiveManifest);
-    const stream = pickBestAudioStream(streams, targetBitrate, preferHls);
-    if (stream) {
-      const source = toResolvedAudioSource(stream);
-      cacheAudioSource(videoId, cacheMode, source);
-      return source;
-    }
-    errors.push('Watch page: no suitable audio stream found');
-  } catch (err: any) {
-    errors.push(`Watch page: ${err.message}`);
-  }
+  const watchResult = await trySource(
+    'Watch page',
+    () => getStreamFromWatchPage(videoId, allowAdaptiveManifest),
+    preferHls
+  );
+  if (watchResult) return watchResult;
 
   console.warn('All stream methods failed:', errors);
   throw new Error(
