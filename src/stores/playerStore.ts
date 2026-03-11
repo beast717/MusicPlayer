@@ -8,9 +8,10 @@ import { buildTrackPlayerSource, PlayerTrackSource } from '../services/trackPlay
 import { MAX_RECENT_TRACKS } from '../utils/constants';
 
 // ─── Concurrency helpers ────────────────────────────────────────────
-// Only one playTrack/playQueue operation may run at a time.
-// Rapid taps will wait for the previous operation to finish.
-let _playLock: Promise<void> = Promise.resolve();
+// Latest-wins pattern: each playTrack/playQueue call gets a unique nonce.
+// If a newer call starts while an older one is still resolving, the older
+// one bails out at the next async boundary. No waiting/blocking.
+let _switchNonce = 0;
 
 // When non-null, playTrack/playQueue is actively managing this track.
 // The PlaybackActiveTrackChanged handler must NOT overwrite currentTrack
@@ -71,12 +72,8 @@ export const usePlayerStore = create<PlayerStore>()(
 
       // Actions
       playTrack: async (track: Track) => {
-        // Serialize: wait for any in-flight play operation to finish
-        const prevLock = _playLock;
-        let releaseLock: () => void = () => {};
-        _playLock = new Promise<void>((resolve) => { releaseLock = resolve; });
-        await prevLock;
-
+        // Latest-wins: grab a unique nonce; bail out if superseded
+        const myNonce = ++_switchNonce;
         _switchingTrackId = track.id;
         set({ isLoading: true, error: null, queue: [track] });
         try {
@@ -85,9 +82,11 @@ export const usePlayerStore = create<PlayerStore>()(
             : buildTrackPlayerSource(await getAudioPlaybackSource(track.id));
 
           // Bail out if another playTrack call started while we were resolving
-          if (_switchingTrackId !== track.id) return;
+          if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.reset();
+          if (myNonce !== _switchNonce) return;
+
           await TrackPlayer.add({
             id: track.id,
             ...source,
@@ -96,6 +95,8 @@ export const usePlayerStore = create<PlayerStore>()(
             artwork: track.localThumbnailPath || track.thumbnailUrl,
             duration: track.duration,
           });
+          if (myNonce !== _switchNonce) return;
+
           await TrackPlayer.play();
 
           // Add to recently played
@@ -110,30 +111,25 @@ export const usePlayerStore = create<PlayerStore>()(
           });
         } catch (err: unknown) {
           // Only show error if we're still the active switch
-          if (_switchingTrackId === track.id) {
+          if (myNonce === _switchNonce) {
             set({
               isLoading: false,
               error: err instanceof Error ? err.message : 'Failed to play track',
             });
           }
         } finally {
-          if (_switchingTrackId === track.id) {
+          if (myNonce === _switchNonce) {
             _switchingTrackId = null;
           }
-          releaseLock();
         }
       },
 
       playQueue: async (tracks: Track[], startIndex = 0) => {
         if (tracks.length === 0) return;
 
-        // Serialize: wait for any in-flight play operation to finish
-        const prevLock = _playLock;
-        let releaseLock: () => void = () => {};
-        _playLock = new Promise<void>((resolve) => { releaseLock = resolve; });
-        await prevLock;
-
         const firstTrack = tracks[startIndex] || tracks[0];
+        // Latest-wins: grab a unique nonce; bail out if superseded
+        const myNonce = ++_switchNonce;
         _switchingTrackId = firstTrack.id;
         set({ isLoading: true, error: null, queue: tracks });
 
@@ -145,9 +141,10 @@ export const usePlayerStore = create<PlayerStore>()(
               );
 
           // Bail out if another play call started while we were resolving
-          if (_switchingTrackId !== firstTrack.id) return;
+          if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.reset();
+          if (myNonce !== _switchNonce) return;
 
           // Add all tracks to the queue
           const trackPlayerTracks = await Promise.all(
@@ -172,6 +169,8 @@ export const usePlayerStore = create<PlayerStore>()(
             })
           );
 
+          if (myNonce !== _switchNonce) return;
+
           await TrackPlayer.add(trackPlayerTracks);
           if (startIndex > 0) {
             await TrackPlayer.skip(startIndex);
@@ -188,17 +187,16 @@ export const usePlayerStore = create<PlayerStore>()(
             recentlyPlayed: recent.slice(0, MAX_RECENT_TRACKS),
           });
         } catch (err: unknown) {
-          if (_switchingTrackId === firstTrack.id) {
+          if (myNonce === _switchNonce) {
             set({
               isLoading: false,
               error: err instanceof Error ? err.message : 'Failed to play queue',
             });
           }
         } finally {
-          if (_switchingTrackId === firstTrack.id) {
+          if (myNonce === _switchNonce) {
             _switchingTrackId = null;
           }
-          releaseLock();
         }
       },
 
