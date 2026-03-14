@@ -57,6 +57,9 @@ jobs:
           EI="node_modules/expo-image"
           sed -i '' "s|s.swift_version  = '6.0'|s.swift_version  = '5.10'|" "$EI/ios/ExpoImage.podspec"
           
+          # Fix Swift 6-only syntax: nonisolated(unsafe) -> nonisolated
+          find "$EI/ios" -name "*.swift" -exec sed -i '' 's/nonisolated(unsafe)/nonisolated/g' {} +
+          
           # Validate patches actually applied
           if ! grep -q "5.10" "$EMC/ExpoModulesCore.podspec"; then
             echo "❌ Swift version patch did not apply — podspec may have changed"
@@ -66,7 +69,7 @@ jobs:
             echo "❌ expo-image Swift version patch did not apply"
             exit 1
           fi
-          echo "✅ Patched expo-modules-core & expo-image: Swift 6.0 → 5.10"
+          echo "✅ Patched expo-modules-core & expo-image: Swift 6.0 → 5.10 + removed (unsafe) markings"
 
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --clean
