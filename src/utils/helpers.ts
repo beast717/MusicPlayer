@@ -1,3 +1,19 @@
+import { useCallback, useRef } from 'react';
+
+// Debounced callback hook for React components
+export function useDebouncedCallback<T extends (...args: any[]) => any>(
+  fn: T,
+  delay: number
+): T {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  return useCallback(
+    (...args: any[]) => {
+      if (timer.current) clearTimeout(timer.current);
+      timer.current = setTimeout(() => fn(...args), delay);
+    },
+    [fn, delay]
+  ) as T;
+}
 export function formatDuration(seconds: number): string {
   if (!seconds || seconds <= 0) return '0:00';
   const hrs = Math.floor(seconds / 3600);

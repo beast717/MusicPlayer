@@ -30,11 +30,13 @@ import { typography } from '../theme/typography';
 import { spacing, borderRadius } from '../theme/spacing';
 import { usePlayerStore, useLibraryStore, useDownloadStore } from '../stores';
 import { useProgress } from 'react-native-track-player';
-import { formatDuration } from '../utils/helpers';
+
+import { formatDuration, useDebouncedCallback } from '../utils/helpers';
 
 interface PlayerScreenProps {
   onDismiss: () => void;
 }
+
 
 export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
   const { width: SCREEN_WIDTH } = useWindowDimensions();
@@ -50,6 +52,11 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
   const seekTo = usePlayerStore((s) => s.seekTo);
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
   const cycleRepeatMode = usePlayerStore((s) => s.cycleRepeatMode);
+
+  // Debounced handlers (must be after the above definitions)
+  const debouncedSkipToNext = useDebouncedCallback(skipToNext, 300);
+  const debouncedSkipToPrevious = useDebouncedCallback(skipToPrevious, 300);
+  const debouncedTogglePlayPause = useDebouncedCallback(togglePlayPause, 300);
 
   const isFavorite = useLibraryStore((s) =>
     currentTrack ? s.isFavorite(currentTrack.id) : false
@@ -200,12 +207,12 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
           />
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={skipToPrevious} style={styles.skipButton} accessibilityRole="button" accessibilityLabel="Previous track">
+        <TouchableOpacity onPress={debouncedSkipToPrevious} style={styles.skipButton} accessibilityRole="button" accessibilityLabel="Previous track">
           <SkipBack size={28} color={theme.text} fill={theme.text} />
         </TouchableOpacity>
 
         <TouchableOpacity
-          onPress={togglePlayPause}
+          onPress={debouncedTogglePlayPause}
           style={[styles.playButton, { backgroundColor: theme.primary, shadowColor: theme.primary }]}
           accessibilityRole="button"
           accessibilityLabel={isPlaying ? 'Pause' : 'Play'}
@@ -217,7 +224,7 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={skipToNext} style={styles.skipButton} accessibilityRole="button" accessibilityLabel="Next track">
+        <TouchableOpacity onPress={debouncedSkipToNext} style={styles.skipButton} accessibilityRole="button" accessibilityLabel="Next track">
           <SkipForward size={28} color={theme.text} fill={theme.text} />
         </TouchableOpacity>
 

@@ -80,8 +80,6 @@ export const usePlayerStore = create<PlayerStore>()(
           const source = track.localFilePath
             ? { url: track.localFilePath }
             : buildTrackPlayerSource(await getAudioPlaybackSource(track.id));
-
-          // Bail out if another playTrack call started while we were resolving
           if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.reset();
@@ -98,7 +96,10 @@ export const usePlayerStore = create<PlayerStore>()(
           if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.play();
+          if (myNonce !== _switchNonce) return;
+
           await TrackPlayer.seekTo(0);
+          if (myNonce !== _switchNonce) return;
 
           // Add to recently played
           const recent = get().recentlyPlayed.filter((t) => t.id !== track.id);
@@ -140,8 +141,6 @@ export const usePlayerStore = create<PlayerStore>()(
             : buildTrackPlayerSource(
                 await getAudioPlaybackSource(firstTrack.id)
               );
-
-          // Bail out if another play call started while we were resolving
           if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.reset();
@@ -169,15 +168,18 @@ export const usePlayerStore = create<PlayerStore>()(
               };
             })
           );
-
           if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.add(trackPlayerTracks);
+          if (myNonce !== _switchNonce) return;
           if (startIndex > 0) {
             await TrackPlayer.skip(startIndex);
+            if (myNonce !== _switchNonce) return;
           }
           await TrackPlayer.play();
+          if (myNonce !== _switchNonce) return;
           await TrackPlayer.seekTo(0);
+          if (myNonce !== _switchNonce) return;
 
           const recent = get().recentlyPlayed.filter((t) => t.id !== firstTrack.id);
           recent.unshift(firstTrack);

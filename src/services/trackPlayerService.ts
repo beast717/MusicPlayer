@@ -1,3 +1,4 @@
+
 import TrackPlayer, {
   Event,
   RepeatMode,
@@ -17,6 +18,9 @@ const retriedTrackIds = new Set<string>();
 
 /** Flag to silence spurious active-track events while swapping placeholders. */
 let _isSwappingTrack = false;
+
+/** TrackPlayer setup state flag */
+let isPlayerSetup = false;
 
 // This service is registered with TrackPlayer and handles remote events
 export async function PlaybackService() {
@@ -121,6 +125,7 @@ export async function PlaybackService() {
       store.setIsPlaying(true);
     } else if (isStopped && store.isPlaying) {
       store.setIsPlaying(false);
+
     }
   });
 
@@ -143,14 +148,11 @@ export async function PlaybackService() {
 
       // Update current track in store
       const storeQueue = store.queue;
-      if (nextIndex < storeQueue.length) {
-        const nextTrack = storeQueue[nextIndex];
-        store.setCurrentTrack(nextTrack);
-        // Allow retry for this track if it fails in a future play attempt
-        if (nextTrack) {
-          retriedTrackIds.delete(nextTrack.id);
-        }
-      }
+      if (nextIndex >= storeQueue.length) return;
+
+      const nextTrack = storeQueue[nextIndex];
+      store.setCurrentTrack(nextTrack);
+      if (nextTrack) retriedTrackIds.delete(nextTrack.id);
 
       // If the track URL is a placeholder, resolve it now
       const tpQueue = await TrackPlayer.getQueue();
@@ -159,58 +161,47 @@ export async function PlaybackService() {
         activeTP &&
         (activeTP.url === 'https://placeholder.invalid' || activeTP.url === '')
       ) {
-        const storeTrack = storeQueue[nextIndex];
-        if (storeTrack && !storeTrack.localFilePath) {
+        if (!nextTrack.localFilePath) {
           try {
             const source = buildTrackPlayerSource(
-              await getAudioPlaybackSource(storeTrack.id)
+              await getAudioPlaybackSource(nextTrack.id)
             );
 
-            // In case the user skipped away while we were resolving, abort the swap.
+            // VERIFY that the user is still on the same track
             const currentIndexNow = await TrackPlayer.getActiveTrackIndex();
             if (currentIndexNow !== nextIndex) {
+              // User skipped away – abort replacement
               return;
             }
 
             _isSwappingTrack = true;
             try {
-              // Replace the track with the resolved URL
-              // This triggers some intermediate track change events which will be ignored.
               await TrackPlayer.remove(nextIndex);
               await TrackPlayer.add(
                 {
-                  id: storeTrack.id,
+                  id: nextTrack.id,
                   ...source,
-                  title: storeTrack.title,
-                  artist: storeTrack.artist,
-                  artwork:
-                    storeTrack.localThumbnailPath || storeTrack.thumbnailUrl,
-                  duration: storeTrack.duration,
+                  title: nextTrack.title,
+                  artist: nextTrack.artist,
+                  artwork: nextTrack.localThumbnailPath || nextTrack.thumbnailUrl,
+                  duration: nextTrack.duration,
                 },
                 nextIndex
               );
               await TrackPlayer.skip(nextIndex);
               await TrackPlayer.play();
-              // Ensure the store is correct just in case the final skip event is swallowed
-              store.setCurrentTrack(storeTrack);
+              store.setCurrentTrack(nextTrack);
             } finally {
-              // Use a short delay to allow queued intermediate events to pass before unblocking
-              setTimeout(() => {
-                _isSwappingTrack = false;
-              }, 100);
+              setTimeout(() => { _isSwappingTrack = false; }, 100);
             }
-          } catch (err: unknown) {
-            const message =
-              err instanceof Error ? err.message : 'Failed to resolve stream';
-            store.setError(message);
+          } catch (err) {
+            store.setError(err instanceof Error ? err.message : 'Failed to resolve stream');
           }
         }
       }
     }
   );
 }
-
-let isPlayerSetup = false;
 
 export async function setupTrackPlayer(): Promise<void> {
   if (isPlayerSetup) return;
