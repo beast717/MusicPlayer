@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import {
   View,
   Text,
@@ -9,7 +9,8 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ArrowLeft, Heart, Shuffle, Play } from 'lucide-react-native';
-import { TrackItem } from '../components';
+import { TrackItem, AddToPlaylistModal } from '../components';
+import { Track } from '../types';
 import { useTheme } from '../theme';
 import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
@@ -23,6 +24,8 @@ export function FavoritesScreen() {
   const favorites = useLibraryStore((s) => s.favorites);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const playQueue = usePlayerStore((s) => s.playQueue);
+
+  const [playlistTrack, setPlaylistTrack] = useState<Track | null>(null);
 
   const handlePlayAll = () => {
     if (favorites.length > 0) {
@@ -99,6 +102,7 @@ export function FavoritesScreen() {
             index={index}
             showIndex
             onPress={() => playQueue(favorites, index)}
+            onMorePress={() => setPlaylistTrack(item)}
             isPlaying={currentTrack?.id === item.id}
           />
         )}
@@ -115,6 +119,13 @@ export function FavoritesScreen() {
         }
         contentContainerStyle={{ paddingBottom: MINI_PLAYER_HEIGHT + 20 }}
         showsVerticalScrollIndicator={false}
+      />
+
+      {/* Add To Playlist Modal */}
+      <AddToPlaylistModal
+        visible={!!playlistTrack}
+        track={playlistTrack}
+        onClose={() => setPlaylistTrack(null)}
       />
     </SafeAreaView>
   );
