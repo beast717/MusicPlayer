@@ -2,11 +2,11 @@ import React from 'react';
 import {
   View,
   Text,
-  Image,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Heart, MoreVertical, Download, Play } from 'lucide-react-native';
 import { Track, SearchResult } from '../types';
 import { useTheme } from '../theme';

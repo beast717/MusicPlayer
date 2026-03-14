@@ -3,9 +3,9 @@ import {
   View,
   Text,
   TouchableOpacity,
-  Image,
   StyleSheet,
 } from 'react-native';
+import { Image } from 'expo-image';
 import {
   Play,
   Pause,
