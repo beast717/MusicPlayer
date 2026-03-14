@@ -102,7 +102,7 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
             Now Playing
           </Text>
         </View>
-        <TouchableOpacity style={styles.headerButton}>
+        <TouchableOpacity onPress={onDismiss} style={styles.headerButton} accessibilityRole="button" accessibilityLabel="View playlist">
           <ListMusic size={22} color={theme.text} />
         </TouchableOpacity>
       </View>
