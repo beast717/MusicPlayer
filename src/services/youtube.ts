@@ -147,6 +147,7 @@ interface ResolveAudioOptions {
   allowAdaptiveManifest?: boolean;
   preferHls?: boolean;
   cacheMode: AudioResolveMode;
+  testDirectStreams?: boolean;
 }
 
 function getCachedAudioSource(
@@ -583,7 +584,12 @@ async function resolveAudioSource(
   quality: AudioQuality,
   options: ResolveAudioOptions
 ): Promise<ResolvedAudioSource> {
-  const { allowAdaptiveManifest = false, preferHls = false, cacheMode } = options;
+  const {
+    allowAdaptiveManifest = false,
+    preferHls = false,
+    cacheMode,
+    testDirectStreams = false,
+  } = options;
 
   const cached = getCachedAudioSource(videoId, cacheMode);
   if (cached) return cached;
@@ -600,7 +606,25 @@ async function resolveAudioSource(
     try {
       const streams = await fn();
       const stream = pickBestAudioStream(streams, targetBitrate, usePreferHls);
+
       if (stream) {
+        // If testing direct streams is required, perform a lightweight check to
+        // verify the Google CDN doesn't immediately 403 (due to lacking valid bot signatures).
+        if (testDirectStreams && stream.streamType !== 'hls') {
+          try {
+            const testRes = await fetchWithTimeout(stream.url, {
+              method: 'GET',
+              headers: { Range: 'bytes=0-0' }, // Lightweight grab
+            }, 3000);
+            if (!testRes.ok && testRes.status !== 206) {
+               throw new Error(`HTTP ${testRes.status}`);
+            }
+          } catch (e: any) {
+            errors.push(`${name} url validation failed: ${e.message}`);
+            return null; // Reject stream, fall back!
+          }
+        }
+
         const source = toResolvedAudioSource(stream);
         cacheAudioSource(videoId, cacheMode, source);
         return source;
@@ -698,6 +722,7 @@ export async function getAudioStreamUrl(
     allowAdaptiveManifest: false,
     preferHls: false,
     cacheMode: 'direct',
+    testDirectStreams: true,
   });
   return source.url;
 }
