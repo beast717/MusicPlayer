@@ -7,8 +7,8 @@ import {
   useWindowDimensions,
   Platform,
   ActivityIndicator,
+  Image,
 } from 'react-native';
-import { Image } from 'expo-image';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Slider from '@react-native-community/slider';
 import {

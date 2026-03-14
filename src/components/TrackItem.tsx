@@ -5,8 +5,8 @@ import {
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
+  Image,
 } from 'react-native';
-import { Image } from 'expo-image';
 import { Heart, MoreVertical, Download, Play } from 'lucide-react-native';
 import { Track, SearchResult } from '../types';
 import { useTheme } from '../theme';
