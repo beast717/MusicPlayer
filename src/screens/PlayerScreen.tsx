@@ -7,6 +7,7 @@ import {
   StyleSheet,
   useWindowDimensions,
   Platform,
+  ActivityIndicator,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Slider from '@react-native-community/slider';
@@ -58,6 +59,10 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
   const isDownloaded = useLibraryStore((s) =>
     currentTrack ? s.isDownloaded(currentTrack.id) : false
   );
+  const downloadStatus = useDownloadStore((s) => 
+    currentTrack ? s.getDownloadStatus(currentTrack.id) : null
+  );
+  const isDownloading = downloadStatus === 'downloading';
 
   const progress = useProgress(500);
 
@@ -228,16 +233,21 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
       <View style={styles.bottomActions}>
         <TouchableOpacity
           onPress={() => {
-            if (currentTrack && !isDownloaded) {
+            if (currentTrack && !isDownloaded && !isDownloading) {
               startDownload(currentTrack);
             }
           }}
           style={styles.bottomAction}
+          disabled={isDownloading}
         >
-          <Download
-            size={20}
-            color={isDownloaded ? theme.success : theme.textTertiary}
-          />
+          {isDownloading ? (
+            <ActivityIndicator size="small" color={theme.primary} />
+          ) : (
+            <Download
+              size={20}
+              color={isDownloaded ? theme.success : theme.textTertiary}
+            />
+          )}
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.bottomAction}>
