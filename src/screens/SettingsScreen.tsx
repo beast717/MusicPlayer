@@ -17,8 +17,10 @@ import {
   Info,
   ChevronRight,
   Check,
+  Palette,
 } from 'lucide-react-native';
 import { useTheme } from '../theme';
+import { PrimaryHue } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
 import { useSettingsStore, useLibraryStore } from '../stores';
@@ -34,6 +36,8 @@ export function SettingsScreen() {
   const setDownloadOverWifiOnly = useSettingsStore((s) => s.setDownloadOverWifiOnly);
   const autoPlay = useSettingsStore((s) => s.autoPlay);
   const setAutoPlay = useSettingsStore((s) => s.setAutoPlay);
+  const primaryHue = useSettingsStore((s) => s.primaryHue);
+  const setPrimaryHue = useSettingsStore((s) => s.setPrimaryHue);
   const downloadedTracks = useLibraryStore((s) => s.downloadedTracks);
   const removeDownloadedTrack = useLibraryStore((s) => s.removeDownloadedTrack);
 
@@ -57,6 +61,28 @@ export function SettingsScreen() {
         ...options.map((opt) => ({
           text: `${opt.label}${audioQuality === opt.value ? ' ✓' : ''}`,
           onPress: () => setAudioQuality(opt.value),
+        })),
+        { text: 'Cancel', style: 'cancel' as const },
+      ]
+    );
+  };
+
+  const handlePrimaryHue = () => {
+    const options: { label: string; value: PrimaryHue }[] = [
+      { label: 'Navy Blue (Default)', value: 'navy' },
+      { label: 'Olive Green', value: 'olive' },
+      { label: 'Purple', value: 'purple' },
+      { label: 'Red', value: 'red' },
+      { label: 'Turquoise', value: 'turquoise' },
+    ];
+
+    Alert.alert(
+      'Primary Color',
+      'Choose the app accent color',
+      [
+        ...options.map((opt) => ({
+          text: `${opt.label}${primaryHue === opt.value ? ' ✓' : ''}`,
+          onPress: () => setPrimaryHue(opt.value),
         })),
         { text: 'Cancel', style: 'cancel' as const },
       ]
@@ -91,6 +117,14 @@ export function SettingsScreen() {
     low: 'Low',
     medium: 'Medium',
     high: 'High',
+  };
+
+  const hueLabel: Record<PrimaryHue, string> = {
+    navy: 'Navy Blue',
+    olive: 'Olive Green',
+    purple: 'Purple',
+    red: 'Red',
+    turquoise: 'Turquoise',
   };
 
   return (
@@ -194,7 +228,7 @@ export function SettingsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* About Section */}
+        {/* Appearance Section */}
         <Text
           style={[
             typography.footnote,
@@ -208,21 +242,11 @@ export function SettingsScreen() {
             },
           ]}
         >
-          About
+          Appearance
         </Text>
 
         <View style={[styles.section, { backgroundColor: theme.surface }]}>
           <View style={[styles.row, { borderBottomColor: theme.border }]}>
-            <Info size={20} color={theme.primary} />
-            <Text style={[typography.body, { color: theme.text, flex: 1 }]}>
-              Version
-            </Text>
-            <Text style={[typography.body, { color: theme.textSecondary }]}>
-              {APP_VERSION}
-            </Text>
-          </View>
-
-          <View style={[styles.row, { borderBottomWidth: 0 }]}>
             <View
               style={{
                 width: 20,
@@ -248,6 +272,49 @@ export function SettingsScreen() {
             </Text>
             <Text style={[typography.body, { color: theme.textSecondary }]}>
               {isDark ? 'Dark' : 'Light'} (System)
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={[styles.row, { borderBottomWidth: 0 }]}
+            onPress={handlePrimaryHue}
+          >
+            <Palette size={20} color={theme.primary} />
+            <Text style={[typography.body, { color: theme.text, flex: 1 }]}>
+              Primary Color
+            </Text>
+            <Text style={[typography.body, { color: theme.textSecondary }]}>
+              {hueLabel[primaryHue]}
+            </Text>
+            <ChevronRight size={16} color={theme.textTertiary} />
+          </TouchableOpacity>
+        </View>
+
+        {/* About Section */}
+        <Text
+          style={[
+            typography.footnote,
+            {
+              color: theme.textSecondary,
+              paddingHorizontal: spacing.lg,
+              paddingTop: spacing.xl,
+              paddingBottom: spacing.sm,
+              textTransform: 'uppercase',
+              letterSpacing: 1,
+            },
+          ]}
+        >
+          About
+        </Text>
+
+        <View style={[styles.section, { backgroundColor: theme.surface }]}>
+          <View style={[styles.row, { borderBottomWidth: 0 }]}>
+            <Info size={20} color={theme.primary} />
+            <Text style={[typography.body, { color: theme.text, flex: 1 }]}>
+              Version
+            </Text>
+            <Text style={[typography.body, { color: theme.textSecondary }]}>
+              {APP_VERSION}
             </Text>
           </View>
         </View>

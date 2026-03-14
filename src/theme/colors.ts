@@ -77,3 +77,13 @@ export type ThemeColors = {
   playerGradientEnd: string;
 };
 export type ColorScheme = 'light' | 'dark';
+
+export const primaryPalettes = {
+  navy: { primary: '#1A365D', primaryLight: '#2C5282', gradient: '#1A365D' },
+  olive: { primary: '#4A5D23', primaryLight: '#6B8E23', gradient: '#4A5D23' },
+  purple: { primary: '#6C5CE7', primaryLight: '#A29BFE', gradient: '#6C5CE7' },
+  red: { primary: '#D90429', primaryLight: '#EF233C', gradient: '#D90429' },
+  turquoise: { primary: '#00B4D8', primaryLight: '#48CAE4', gradient: '#00B4D8' },
+} as const;
+
+export type PrimaryHue = keyof typeof primaryPalettes;
