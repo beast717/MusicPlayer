@@ -15,8 +15,8 @@ import {
 /** Track IDs that have already been retried once to avoid infinite retry loops. */
 const retriedTrackIds = new Set<string>();
 
-/** Index currently being resolved for lazy-load; prevents re-entrant cascading. */
-let _resolvingIndex: number | null = null;
+/** Flag to silence spurious active-track events while swapping placeholders. */
+let _isSwappingTrack = false;
 
 // This service is registered with TrackPlayer and handles remote events
 export async function PlaybackService() {
@@ -70,22 +70,30 @@ export async function PlaybackService() {
         const activeIndex = await TrackPlayer.getActiveTrackIndex();
 
         if (activeIndex != null) {
-          await TrackPlayer.remove(activeIndex);
-          await TrackPlayer.add(
-            {
-              id: activeTrackId,
-              ...freshSource,
-              title: currentTrack?.title ?? '',
-              artist: currentTrack?.artist ?? '',
-              artwork: currentTrack?.localThumbnailPath || currentTrack?.thumbnailUrl || '',
-              duration: currentTrack?.duration ?? 0,
-            },
-            activeIndex
-          );
-          await TrackPlayer.skip(activeIndex);
-          await TrackPlayer.play();
-          store.setIsPlaying(true);
-          store.setError(null);
+          _isSwappingTrack = true;
+          try {
+            await TrackPlayer.remove(activeIndex);
+            await TrackPlayer.add(
+              {
+                id: activeTrackId,
+                ...freshSource,
+                title: currentTrack?.title ?? '',
+                artist: currentTrack?.artist ?? '',
+                artwork: currentTrack?.localThumbnailPath || currentTrack?.thumbnailUrl || '',
+                duration: currentTrack?.duration ?? 0,
+              },
+              activeIndex
+            );
+            await TrackPlayer.skip(activeIndex);
+            await TrackPlayer.play();
+            store.setIsPlaying(true);
+            store.setError(null);
+            if (currentTrack) store.setCurrentTrack(currentTrack);
+          } finally {
+            setTimeout(() => {
+              _isSwappingTrack = false;
+            }, 100);
+          }
           return; // Retry succeeded – don't show an error
         }
       } catch (retryErr: any) {
@@ -124,9 +132,8 @@ export async function PlaybackService() {
 
       if (nextIndex == null) return;
 
-      // If this event was triggered by our own lazy-load resolve cycle
-      // (remove/add/skip), ignore it to prevent cascading re-entrancy.
-      if (_resolvingIndex === nextIndex) return;
+      // Ignore intermediate events while we are replacing a track placeholder
+      if (_isSwappingTrack) return;
 
       // If playTrack/playQueue is actively switching, it will set
       // currentTrack itself — don't fight with it.
@@ -154,33 +161,48 @@ export async function PlaybackService() {
       ) {
         const storeTrack = storeQueue[nextIndex];
         if (storeTrack && !storeTrack.localFilePath) {
-          _resolvingIndex = nextIndex;
           try {
             const source = buildTrackPlayerSource(
               await getAudioPlaybackSource(storeTrack.id)
             );
-            // Replace the track with the resolved URL
-            await TrackPlayer.remove(nextIndex);
-            await TrackPlayer.add(
-              {
-                id: storeTrack.id,
-                ...source,
-                title: storeTrack.title,
-                artist: storeTrack.artist,
-                artwork:
-                  storeTrack.localThumbnailPath || storeTrack.thumbnailUrl,
-                duration: storeTrack.duration,
-              },
-              nextIndex
-            );
-            await TrackPlayer.skip(nextIndex);
-            await TrackPlayer.play();
+
+            // In case the user skipped away while we were resolving, abort the swap.
+            const currentIndexNow = await TrackPlayer.getActiveTrackIndex();
+            if (currentIndexNow !== nextIndex) {
+              return;
+            }
+
+            _isSwappingTrack = true;
+            try {
+              // Replace the track with the resolved URL
+              // This triggers some intermediate track change events which will be ignored.
+              await TrackPlayer.remove(nextIndex);
+              await TrackPlayer.add(
+                {
+                  id: storeTrack.id,
+                  ...source,
+                  title: storeTrack.title,
+                  artist: storeTrack.artist,
+                  artwork:
+                    storeTrack.localThumbnailPath || storeTrack.thumbnailUrl,
+                  duration: storeTrack.duration,
+                },
+                nextIndex
+              );
+              await TrackPlayer.skip(nextIndex);
+              await TrackPlayer.play();
+              // Ensure the store is correct just in case the final skip event is swallowed
+              store.setCurrentTrack(storeTrack);
+            } finally {
+              // Use a short delay to allow queued intermediate events to pass before unblocking
+              setTimeout(() => {
+                _isSwappingTrack = false;
+              }, 100);
+            }
           } catch (err: unknown) {
             const message =
               err instanceof Error ? err.message : 'Failed to resolve stream';
             store.setError(message);
-          } finally {
-            _resolvingIndex = null;
           }
         }
       }
