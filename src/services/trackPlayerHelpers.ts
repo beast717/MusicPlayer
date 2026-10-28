@@ -1,9 +1,15 @@
 import { Platform } from 'react-native';
-import { TrackType } from 'react-native-track-player';
-import { ResolvedAudioSource } from '../types';
+import { AddTrack, TrackType } from 'react-native-track-player';
+import { ResolvedAudioSource, Track } from '../types';
+import { useLibraryStore } from '../stores/libraryStore';
+import { getLocalFilePath } from './downloadManager';
+import { getAudioPlaybackSource } from './youtube';
 
 export const IOS_REMOTE_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1';
+
+/** URL for queued tracks whose stream is resolved just-in-time on track change. */
+export const PLACEHOLDER_URL = 'https://placeholder.invalid';
 
 export interface PlayerTrackSource {
   url: string;
@@ -57,4 +63,29 @@ export function getActiveTrackDebug(activeTrack: any): string {
   ].filter(Boolean);
 
   return parts.join(' ');
+}
+
+/** Local file if the track is downloaded, otherwise null. */
+export function getLocalTrackSource(track: Track): PlayerTrackSource | null {
+  const isDownloaded = useLibraryStore.getState().isDownloaded(track.id);
+  return isDownloaded ? { url: getLocalFilePath(track.id) } : null;
+}
+
+/** Local file if downloaded, otherwise a freshly resolved stream. */
+export async function resolveTrackSource(track: Track): Promise<PlayerTrackSource> {
+  return (
+    getLocalTrackSource(track) ??
+    buildTrackPlayerSource(await getAudioPlaybackSource(track.id))
+  );
+}
+
+export function toTrackPlayerTrack(track: Track, source: PlayerTrackSource): AddTrack {
+  return {
+    id: track.id,
+    ...source,
+    title: track.title,
+    artist: track.artist,
+    artwork: track.localThumbnailPath || track.thumbnailUrl,
+    duration: track.duration,
+  };
 }

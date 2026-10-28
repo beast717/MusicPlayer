@@ -23,7 +23,7 @@ import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
 import { useLibraryStore, usePlayerStore, useDownloadStore } from '../stores';
 import { clearAllDownloads, getTotalDownloadsSize } from '../services/downloadManager';
 import { useNavigation } from '@react-navigation/native';
-import { formatSize, shuffleArray } from '../utils/helpers';
+import { formatSize } from '../utils/helpers';
 
 export function DownloadsScreen() {
   const { theme } = useTheme();
@@ -32,6 +32,7 @@ export function DownloadsScreen() {
   const removeDownloadedTrack = useLibraryStore((s) => s.removeDownloadedTrack);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const playQueue = usePlayerStore((s) => s.playQueue);
+  const shufflePlay = usePlayerStore((s) => s.shufflePlay);
   const removeDownload = useDownloadStore((s) => s.removeDownload);
 
   const [totalSize, setTotalSize] = useState(0);
@@ -82,8 +83,7 @@ export function DownloadsScreen() {
 
   const handleShuffleAll = () => {
     if (downloadedTracks.length > 0) {
-      const shuffled = shuffleArray(downloadedTracks);
-      playQueue(shuffled);
+      shufflePlay(downloadedTracks);
     }
   };
 

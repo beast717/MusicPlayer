@@ -1,23 +1,29 @@
 
 import TrackPlayer, {
   Event,
-  RepeatMode,
   Capability,
   AppKilledPlaybackBehavior,
   State,
 } from 'react-native-track-player';
-import { usePlayerStore, getSwitchingTrackId } from '../stores/playerStore';
+import {
+  usePlayerStore,
+  getSwitchingTrackId,
+  isReorderingQueue,
+  isSwappingTrack,
+  setSwappingTrack,
+  toTrackPlayerRepeatMode,
+} from '../stores/playerStore';
 import { getAudioPlaybackSource, invalidateStreamCache } from './youtube';
 import {
   buildTrackPlayerSource,
   getActiveTrackDebug,
+  resolveTrackSource,
+  toTrackPlayerTrack,
+  PLACEHOLDER_URL,
 } from './trackPlayerHelpers';
 
 /** Track IDs that have already been retried once to avoid infinite retry loops. */
 const retriedTrackIds = new Set<string>();
-
-/** Flag to silence spurious active-track events while swapping placeholders. */
-let _isSwappingTrack = false;
 
 /** TrackPlayer setup state flag */
 let isPlayerSetup = false;
@@ -74,7 +80,7 @@ export async function PlaybackService() {
         const activeIndex = await TrackPlayer.getActiveTrackIndex();
 
         if (activeIndex != null) {
-          _isSwappingTrack = true;
+          setSwappingTrack(true);
           try {
             await TrackPlayer.remove(activeIndex);
             await TrackPlayer.add(
@@ -94,9 +100,7 @@ export async function PlaybackService() {
             store.setError(null);
             if (currentTrack) store.setCurrentTrack(currentTrack);
           } finally {
-            setTimeout(() => {
-              _isSwappingTrack = false;
-            }, 100);
+            setTimeout(() => setSwappingTrack(false), 100);
           }
           return; // Retry succeeded – don't show an error
         }
@@ -138,11 +142,12 @@ export async function PlaybackService() {
       if (nextIndex == null) return;
 
       // Ignore intermediate events while we are replacing a track placeholder
-      if (_isSwappingTrack) return;
+      if (isSwappingTrack()) return;
 
       // If playTrack/playQueue is actively switching, it will set
-      // currentTrack itself — don't fight with it.
-      if (getSwitchingTrackId() != null) return;
+      // currentTrack itself — don't fight with it. Same while shuffle
+      // is rearranging the queue around the playing track.
+      if (getSwitchingTrackId() != null || isReorderingQueue()) return;
 
       const store = usePlayerStore.getState();
 
@@ -157,46 +162,30 @@ export async function PlaybackService() {
       // If the track URL is a placeholder, resolve it now
       const tpQueue = await TrackPlayer.getQueue();
       const activeTP = tpQueue[nextIndex];
-      if (
-        activeTP &&
-        (activeTP.url === 'https://placeholder.invalid' || activeTP.url === '')
-      ) {
-        if (!nextTrack.localFilePath) {
-          try {
-            const source = buildTrackPlayerSource(
-              await getAudioPlaybackSource(nextTrack.id)
-            );
+      if (activeTP && (activeTP.url === PLACEHOLDER_URL || activeTP.url === '')) {
+        try {
+          // Plays from disk if the track was downloaded after it was queued
+          const source = await resolveTrackSource(nextTrack);
 
-            // VERIFY that the user is still on the same track
-            const currentIndexNow = await TrackPlayer.getActiveTrackIndex();
-            if (currentIndexNow !== nextIndex) {
-              // User skipped away – abort replacement
-              return;
-            }
-
-            _isSwappingTrack = true;
-            try {
-              await TrackPlayer.remove(nextIndex);
-              await TrackPlayer.add(
-                {
-                  id: nextTrack.id,
-                  ...source,
-                  title: nextTrack.title,
-                  artist: nextTrack.artist,
-                  artwork: nextTrack.localThumbnailPath || nextTrack.thumbnailUrl,
-                  duration: nextTrack.duration,
-                },
-                nextIndex
-              );
-              await TrackPlayer.skip(nextIndex);
-              await TrackPlayer.play();
-              store.setCurrentTrack(nextTrack);
-            } finally {
-              setTimeout(() => { _isSwappingTrack = false; }, 100);
-            }
-          } catch (err) {
-            store.setError(err instanceof Error ? err.message : 'Failed to resolve stream');
+          // VERIFY that the user is still on the same track
+          const currentIndexNow = await TrackPlayer.getActiveTrackIndex();
+          if (currentIndexNow !== nextIndex) {
+            // User skipped away – abort replacement
+            return;
           }
+
+          setSwappingTrack(true);
+          try {
+            await TrackPlayer.remove(nextIndex);
+            await TrackPlayer.add(toTrackPlayerTrack(nextTrack, source), nextIndex);
+            await TrackPlayer.skip(nextIndex);
+            await TrackPlayer.play();
+            store.setCurrentTrack(nextTrack);
+          } finally {
+            setTimeout(() => setSwappingTrack(false), 100);
+          }
+        } catch (err) {
+          store.setError(err instanceof Error ? err.message : 'Failed to resolve stream');
         }
       }
     }
@@ -232,7 +221,10 @@ export async function setupTrackPlayer(): Promise<void> {
       progressUpdateEventInterval: 1,
     });
 
-    await TrackPlayer.setRepeatMode(RepeatMode.Off);
+    // Restore the persisted repeat mode so the player matches the UI
+    await TrackPlayer.setRepeatMode(
+      toTrackPlayerRepeatMode(usePlayerStore.getState().repeatMode)
+    );
     isPlayerSetup = true;
   } catch (error) {
     console.error('Error setting up TrackPlayer:', error);

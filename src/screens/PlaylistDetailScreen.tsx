@@ -21,7 +21,6 @@ import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
 import { useLibraryStore, usePlayerStore } from '../stores';
 import { PlaylistDetailScreenProps, Track } from '../types';
-import { shuffleArray } from '../utils/helpers';
 
 export function PlaylistDetailScreen({
   route,
@@ -35,6 +34,7 @@ export function PlaylistDetailScreen({
   const deletePlaylist = useLibraryStore((s) => s.deletePlaylist);
   const playTrack = usePlayerStore((s) => s.playTrack);
   const playQueue = usePlayerStore((s) => s.playQueue);
+  const shufflePlay = usePlayerStore((s) => s.shufflePlay);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
 
   const [playlistTrack, setPlaylistTrack] = useState<Track | null>(null);
@@ -60,8 +60,7 @@ export function PlaylistDetailScreen({
 
   const handleShuffleAll = () => {
     if (playlist.tracks.length > 0) {
-      const shuffled = shuffleArray(playlist.tracks);
-      playQueue(shuffled);
+      shufflePlay(playlist.tracks);
     }
   };
 

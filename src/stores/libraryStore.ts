@@ -3,6 +3,7 @@ import { persist, createJSONStorage } from 'zustand/middleware';
 import { Track, Playlist } from '../types';
 import { zustandMMKVStorage } from '../services/storage';
 import { generateId } from '../utils/helpers';
+import { withCurrentLocalPaths } from '../services/downloadManager';
 
 interface LibraryState {
   playlists: Playlist[];
@@ -161,6 +162,25 @@ export const useLibraryStore = create<LibraryStore>()(
     {
       name: 'library-store',
       storage: createJSONStorage(() => zustandMMKVStorage),
+      // Saved local paths go stale when iOS moves the app container
+      // (reinstall / re-sideload), so rebuild them on every load.
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<LibraryState>;
+        return {
+          ...currentState,
+          ...persisted,
+          playlists: (persisted.playlists ?? currentState.playlists).map((p) => ({
+            ...p,
+            tracks: p.tracks.map(withCurrentLocalPaths),
+          })),
+          favorites: (persisted.favorites ?? currentState.favorites).map(
+            withCurrentLocalPaths
+          ),
+          downloadedTracks: (
+            persisted.downloadedTracks ?? currentState.downloadedTracks
+          ).map(withCurrentLocalPaths),
+        };
+      },
     }
   )
 );

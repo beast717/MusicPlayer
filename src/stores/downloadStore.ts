@@ -5,6 +5,8 @@ import { zustandMMKVStorage } from '../services/storage';
 import {
   downloadTrack as downloadTrackFile,
   deleteDownload as deleteDownloadFile,
+  cancelDownload as cancelDownloadFile,
+  isDownloadCancelledError,
   DownloadProgress,
 } from '../services/downloadManager';
 import { useLibraryStore } from './libraryStore';
@@ -32,12 +34,21 @@ interface DownloadActions {
 
 type DownloadStore = DownloadState & DownloadActions;
 
+// Each startDownload gets a run id. A run that is no longer the current one
+// for its track (cancelled or restarted) must not touch state or the library.
+let _runCounter = 0;
+const currentRuns: Record<string, number> = {};
+
 export const useDownloadStore = create<DownloadStore>()((set, get) => ({
   activeDownloads: {},
 
   startDownload: async (track: Track) => {
     const { activeDownloads } = get();
     if (activeDownloads[track.id]?.status === 'downloading') return;
+
+    const runId = ++_runCounter;
+    currentRuns[track.id] = runId;
+    const isCurrentRun = () => currentRuns[track.id] === runId;
 
     set((state) => ({
       activeDownloads: {
@@ -52,16 +63,30 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
 
     try {
       const result = await downloadTrackFile(track, (progress: DownloadProgress) => {
-        set((state) => ({
-          activeDownloads: {
-            ...state.activeDownloads,
-            [track.id]: {
-              ...state.activeDownloads[track.id],
-              progress: progress.progress,
+        if (!isCurrentRun()) return;
+        set((state) => {
+          const existing = state.activeDownloads[track.id];
+          if (!existing) return state;
+          return {
+            activeDownloads: {
+              ...state.activeDownloads,
+              [track.id]: { ...existing, progress: progress.progress },
             },
-          },
-        }));
+          };
+        });
       });
+
+      if (!isCurrentRun()) {
+        // Cancelled after the file was already saved: don't keep an orphan file
+        if (
+          currentRuns[track.id] === undefined &&
+          !useLibraryStore.getState().isDownloaded(track.id)
+        ) {
+          await deleteDownloadFile(track.id);
+        }
+        return;
+      }
+      delete currentRuns[track.id];
 
       // Update library store with downloaded track
       const downloadedTrack: Track = {
@@ -86,18 +111,23 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
       // Remove from active downloads after a brief delay
       setTimeout(() => {
         set((state) => {
+          if (state.activeDownloads[track.id]?.status !== 'completed') return state;
           const { [track.id]: _, ...rest } = state.activeDownloads;
           return { activeDownloads: rest };
         });
       }, 2000);
     } catch (err: any) {
+      if (!isCurrentRun() || isDownloadCancelledError(err)) return;
+      delete currentRuns[track.id];
+
       set((state) => ({
         activeDownloads: {
           ...state.activeDownloads,
           [track.id]: {
-            ...state.activeDownloads[track.id],
+            track,
+            progress: state.activeDownloads[track.id]?.progress ?? 0,
             status: 'failed' as DownloadStatus,
-            error: err.message,
+            error: err?.message || 'Download failed',
           },
         },
       }));
@@ -105,6 +135,8 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
   },
 
   cancelDownload: (videoId: string) => {
+    delete currentRuns[videoId];
+    cancelDownloadFile(videoId);
     set((state) => {
       const { [videoId]: _, ...rest } = state.activeDownloads;
       return { activeDownloads: rest };

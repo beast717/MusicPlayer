@@ -16,7 +16,6 @@ import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
 import { useLibraryStore, usePlayerStore } from '../stores';
 import { useNavigation } from '@react-navigation/native';
-import { shuffleArray } from '../utils/helpers';
 
 export function FavoritesScreen() {
   const { theme } = useTheme();
@@ -24,6 +23,7 @@ export function FavoritesScreen() {
   const favorites = useLibraryStore((s) => s.favorites);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
   const playQueue = usePlayerStore((s) => s.playQueue);
+  const shufflePlay = usePlayerStore((s) => s.shufflePlay);
 
   const [playlistTrack, setPlaylistTrack] = useState<Track | null>(null);
 
@@ -35,8 +35,7 @@ export function FavoritesScreen() {
 
   const handleShuffleAll = () => {
     if (favorites.length > 0) {
-      const shuffled = shuffleArray(favorites);
-      playQueue(shuffled);
+      shufflePlay(favorites);
     }
   };
 

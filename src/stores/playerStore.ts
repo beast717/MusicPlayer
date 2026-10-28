@@ -1,11 +1,18 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import TrackPlayer, { RepeatMode } from 'react-native-track-player';
+import TrackPlayer, { AddTrack, RepeatMode } from 'react-native-track-player';
 import { Track } from '../types';
-import { getAudioPlaybackSource } from '../services/youtube';
 import { zustandMMKVStorage } from '../services/storage';
-import { buildTrackPlayerSource, PlayerTrackSource } from '../services/trackPlayerHelpers';
+import { withCurrentLocalPaths } from '../services/downloadManager';
+import {
+  getLocalTrackSource,
+  resolveTrackSource,
+  toTrackPlayerTrack,
+  PLACEHOLDER_URL,
+  PlayerTrackSource,
+} from '../services/trackPlayerHelpers';
 import { MAX_RECENT_TRACKS } from '../utils/constants';
+import { shuffleArray } from '../utils/helpers';
 
 // ─── Concurrency helpers ────────────────────────────────────────────
 // Latest-wins pattern: each playTrack/playQueue call gets a unique nonce.
@@ -18,17 +25,51 @@ let _switchNonce = 0;
 // while this is set.
 let _switchingTrackId: string | null = null;
 
+// True while toggleShuffle is rearranging the TrackPlayer queue around the
+// playing track. Active-track events during that window are not real skips.
+let _isReorderingQueue = false;
+
+// True while the playback service swaps a placeholder for its resolved
+// stream (remove + add + skip). The queue must not be rearranged meanwhile.
+let _isSwappingTrack = false;
+
+export function setSwappingTrack(value: boolean): void {
+  _isSwappingTrack = value;
+}
+
+export function isSwappingTrack(): boolean {
+  return _isSwappingTrack;
+}
+
 export function getSwitchingTrackId(): string | null {
   return _switchingTrackId;
+}
+
+export function isReorderingQueue(): boolean {
+  return _isReorderingQueue;
 }
 
 
 export type ShuffleMode = 'off' | 'on';
 export type RepeatModeType = 'off' | 'track' | 'queue';
 
+export function toTrackPlayerRepeatMode(mode: RepeatModeType): RepeatMode {
+  switch (mode) {
+    case 'queue':
+      return RepeatMode.Queue;
+    case 'track':
+      return RepeatMode.Track;
+    default:
+      return RepeatMode.Off;
+  }
+}
+
 interface PlayerState {
   currentTrack: Track | null;
+  /** Tracks in play order (shuffled when shuffle is on). Mirrors the TrackPlayer queue. */
   queue: Track[];
+  /** The queue in the order it was started, used to restore order when shuffle is turned off. */
+  originalQueue: Track[];
   recentlyPlayed: Track[];
   isPlaying: boolean;
   shuffleMode: ShuffleMode;
@@ -37,9 +78,15 @@ interface PlayerState {
   error: string | null;
 }
 
+interface PlayQueueOptions {
+  /** Force shuffle on for this queue (and turn shuffle mode on). */
+  shuffle?: boolean;
+}
+
 interface PlayerActions {
   playTrack: (track: Track) => Promise<void>;
-  playQueue: (tracks: Track[], startIndex?: number) => Promise<void>;
+  playQueue: (tracks: Track[], startIndex?: number, options?: PlayQueueOptions) => Promise<void>;
+  shufflePlay: (tracks: Track[]) => Promise<void>;
   addToQueue: (track: Track) => Promise<void>;
   removeFromQueue: (index: number) => Promise<void>;
   clearQueue: () => Promise<void>;
@@ -47,7 +94,7 @@ interface PlayerActions {
   skipToNext: () => Promise<void>;
   skipToPrevious: () => Promise<void>;
   seekTo: (position: number) => Promise<void>;
-  toggleShuffle: () => void;
+  toggleShuffle: () => Promise<void>;
   cycleRepeatMode: () => Promise<void>;
   setIsPlaying: (playing: boolean) => void;
   setCurrentTrack: (track: Track | null) => void;
@@ -57,12 +104,18 @@ interface PlayerActions {
 
 type PlayerStore = PlayerState & PlayerActions;
 
+/** Downloaded tracks play from disk; others get a placeholder resolved on track change. */
+function lazyTrackSource(track: Track): PlayerTrackSource {
+  return getLocalTrackSource(track) ?? { url: PLACEHOLDER_URL };
+}
+
 export const usePlayerStore = create<PlayerStore>()(
   persist(
     (set, get) => ({
       // State
       currentTrack: null,
       queue: [],
+      originalQueue: [],
       recentlyPlayed: [],
       isPlaying: false,
       shuffleMode: 'off' as ShuffleMode,
@@ -75,24 +128,17 @@ export const usePlayerStore = create<PlayerStore>()(
         // Latest-wins: grab a unique nonce; bail out if superseded
         const myNonce = ++_switchNonce;
         _switchingTrackId = track.id;
-        set({ isLoading: true, error: null, queue: [track] });
+        set({ isLoading: true, error: null, queue: [track], originalQueue: [track] });
         try {
-          const source = track.localFilePath
-            ? { url: track.localFilePath }
-            : buildTrackPlayerSource(await getAudioPlaybackSource(track.id));
+          const source = await resolveTrackSource(track);
           if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.reset();
           if (myNonce !== _switchNonce) return;
+          await TrackPlayer.setRepeatMode(toTrackPlayerRepeatMode(get().repeatMode));
+          if (myNonce !== _switchNonce) return;
 
-          await TrackPlayer.add({
-            id: track.id,
-            ...source,
-            title: track.title,
-            artist: track.artist,
-            artwork: track.localThumbnailPath || track.thumbnailUrl,
-            duration: track.duration,
-          });
+          await TrackPlayer.add(toTrackPlayerTrack(track, source));
           if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.play();
@@ -126,54 +172,51 @@ export const usePlayerStore = create<PlayerStore>()(
         }
       },
 
-      playQueue: async (tracks: Track[], startIndex = 0) => {
+      playQueue: async (tracks: Track[], startIndex = 0, options: PlayQueueOptions = {}) => {
         if (tracks.length === 0) return;
 
-        const firstTrack = tracks[startIndex] || tracks[0];
+        const safeStartIndex = tracks[startIndex] ? startIndex : 0;
+        const firstTrack = tracks[safeStartIndex];
+        const shuffle = options.shuffle ?? get().shuffleMode === 'on';
+
+        // With shuffle on, the chosen track plays first and the rest follow in random order
+        const orderedTracks = shuffle
+          ? [firstTrack, ...shuffleArray(tracks.filter((_, i) => i !== safeStartIndex))]
+          : tracks;
+        const playIndex = shuffle ? 0 : safeStartIndex;
+
         // Latest-wins: grab a unique nonce; bail out if superseded
         const myNonce = ++_switchNonce;
         _switchingTrackId = firstTrack.id;
-        set({ isLoading: true, error: null, queue: tracks });
+        set({
+          isLoading: true,
+          error: null,
+          queue: orderedTracks,
+          originalQueue: tracks,
+          ...(options.shuffle ? { shuffleMode: 'on' as ShuffleMode } : {}),
+        });
 
         try {
-          const firstTrackSource = firstTrack.localFilePath
-            ? { url: firstTrack.localFilePath }
-            : buildTrackPlayerSource(
-                await getAudioPlaybackSource(firstTrack.id)
-              );
+          const firstTrackSource = await resolveTrackSource(firstTrack);
           if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.reset();
           if (myNonce !== _switchNonce) return;
+          await TrackPlayer.setRepeatMode(toTrackPlayerRepeatMode(get().repeatMode));
+          if (myNonce !== _switchNonce) return;
 
           // Add all tracks to the queue
-          const trackPlayerTracks = await Promise.all(
-            tracks.map(async (track, i) => {
-              let trackSource: PlayerTrackSource;
-              if (i === startIndex) {
-                trackSource = firstTrackSource;
-              } else if (track.localFilePath) {
-                trackSource = { url: track.localFilePath };
-              } else {
-                // Lazy load: use a placeholder, will re-resolve on track change
-                trackSource = { url: 'https://placeholder.invalid' };
-              }
-              return {
-                id: track.id,
-                ...trackSource,
-                title: track.title,
-                artist: track.artist,
-                artwork: track.localThumbnailPath || track.thumbnailUrl,
-                duration: track.duration,
-              };
-            })
+          const trackPlayerTracks = orderedTracks.map((track, i) =>
+            toTrackPlayerTrack(
+              track,
+              i === playIndex ? firstTrackSource : lazyTrackSource(track)
+            )
           );
-          if (myNonce !== _switchNonce) return;
 
           await TrackPlayer.add(trackPlayerTracks);
           if (myNonce !== _switchNonce) return;
-          if (startIndex > 0) {
-            await TrackPlayer.skip(startIndex);
+          if (playIndex > 0) {
+            await TrackPlayer.skip(playIndex);
             if (myNonce !== _switchNonce) return;
           }
           await TrackPlayer.play();
@@ -204,40 +247,43 @@ export const usePlayerStore = create<PlayerStore>()(
         }
       },
 
+      shufflePlay: async (tracks: Track[]) => {
+        if (tracks.length === 0) return;
+        const startIndex = Math.floor(Math.random() * tracks.length);
+        await get().playQueue(tracks, startIndex, { shuffle: true });
+      },
+
       addToQueue: async (track: Track) => {
-        const { queue } = get();
-        set({ queue: [...queue, track] });
+        const { queue, originalQueue } = get();
+        set({ queue: [...queue, track], originalQueue: [...originalQueue, track] });
 
         try {
-          const source = track.localFilePath
-            ? { url: track.localFilePath }
-            : buildTrackPlayerSource(await getAudioPlaybackSource(track.id));
-
-          await TrackPlayer.add({
-            id: track.id,
-            ...source,
-            title: track.title,
-            artist: track.artist,
-            artwork: track.localThumbnailPath || track.thumbnailUrl,
-            duration: track.duration,
-          });
+          const source = await resolveTrackSource(track);
+          await TrackPlayer.add(toTrackPlayerTrack(track, source));
         } catch (err: unknown) {
           console.warn('Failed to add to queue:', err);
         }
       },
 
       removeFromQueue: async (index: number) => {
-        const { queue } = get();
+        const { queue, originalQueue } = get();
+        const removed = queue[index];
+        if (!removed) return;
+
         const newQueue = [...queue];
         newQueue.splice(index, 1);
-        set({ queue: newQueue });
+        const newOriginalQueue = [...originalQueue];
+        const originalIndex = newOriginalQueue.findIndex((t) => t.id === removed.id);
+        if (originalIndex !== -1) newOriginalQueue.splice(originalIndex, 1);
+
+        set({ queue: newQueue, originalQueue: newOriginalQueue });
         try {
           await TrackPlayer.remove(index);
         } catch {}
       },
 
       clearQueue: async () => {
-        set({ queue: [] });
+        set({ queue: [], originalQueue: [] });
         try {
           await TrackPlayer.reset();
         } catch (err) {
@@ -285,36 +331,90 @@ export const usePlayerStore = create<PlayerStore>()(
         }
       },
 
-      toggleShuffle: () => {
-        const { shuffleMode } = get();
-        set({ shuffleMode: shuffleMode === 'off' ? 'on' : 'off' });
+      toggleShuffle: async () => {
+        // Ignore taps while a track switch, placeholder swap or another reorder
+        // is in flight; the queue being changed would not match the new mode.
+        if (_isReorderingQueue || _isSwappingTrack || _switchingTrackId != null) return;
+
+        const { shuffleMode, queue, originalQueue } = get();
+        const nextMode: ShuffleMode = shuffleMode === 'off' ? 'on' : 'off';
+
+        _isReorderingQueue = true;
+        try {
+          const activeIndex = await TrackPlayer.getActiveTrackIndex();
+          const tpQueue = await TrackPlayer.getQueue();
+
+          // The playing track's stream is still being resolved; ignore until it plays
+          if (activeIndex != null && tpQueue[activeIndex]?.url === PLACEHOLDER_URL) return;
+
+          // Nothing to reorder: just remember the mode for the next queue
+          if (
+            activeIndex == null ||
+            queue.length < 2 ||
+            tpQueue.length !== queue.length ||
+            !queue[activeIndex] ||
+            String(tpQueue[activeIndex].id) !== queue[activeIndex].id
+          ) {
+            set({ shuffleMode: nextMode });
+            return;
+          }
+
+          const current = queue[activeIndex];
+          let newQueue: Track[];
+          let newActiveIndex: number;
+
+          if (nextMode === 'on') {
+            newQueue = [current, ...shuffleArray(queue.filter((_, i) => i !== activeIndex))];
+            newActiveIndex = 0;
+          } else {
+            newQueue = originalQueue.length === queue.length ? originalQueue : queue;
+            newActiveIndex = newQueue.findIndex((t) => t.id === current.id);
+            if (newActiveIndex === -1) {
+              newQueue = queue;
+              newActiveIndex = activeIndex;
+            }
+          }
+
+          // Reuse the TrackPlayer entries so already-resolved stream URLs are kept
+          const tpTrackById = new Map<string, AddTrack>();
+          tpQueue.forEach((t) => tpTrackById.set(String(t.id), t));
+          const toTpTrack = (track: Track): AddTrack =>
+            tpTrackById.get(track.id) ?? toTrackPlayerTrack(track, lazyTrackSource(track));
+
+          const before = newQueue.slice(0, newActiveIndex).map(toTpTrack);
+          const after = newQueue.slice(newActiveIndex + 1).map(toTpTrack);
+
+          // Update the store first so any active-track event maps indexes to the new order
+          set({ queue: newQueue, shuffleMode: nextMode, currentTrack: current });
+
+          // Rebuild the TrackPlayer queue around the playing track without interrupting it
+          await TrackPlayer.removeUpcomingTracks();
+          if (activeIndex > 0) {
+            await TrackPlayer.remove(Array.from({ length: activeIndex }, (_, i) => i));
+          }
+          if (after.length > 0) await TrackPlayer.add(after);
+          if (before.length > 0) await TrackPlayer.add(before, 0);
+        } catch (err) {
+          console.warn('Failed to toggle shuffle:', err);
+        } finally {
+          // Let any trailing active-track events from the reorder pass first
+          setTimeout(() => {
+            _isReorderingQueue = false;
+          }, 100);
+        }
       },
 
       cycleRepeatMode: async () => {
         const { repeatMode } = get();
-        let next: RepeatModeType;
-        let trackPlayerMode: RepeatMode;
+        const next: RepeatModeType =
+          repeatMode === 'off' ? 'queue' : repeatMode === 'queue' ? 'track' : 'off';
 
-        switch (repeatMode) {
-          case 'off':
-            next = 'queue';
-            trackPlayerMode = RepeatMode.Queue;
-            break;
-          case 'queue':
-            next = 'track';
-            trackPlayerMode = RepeatMode.Track;
-            break;
-          case 'track':
-            next = 'off';
-            trackPlayerMode = RepeatMode.Off;
-            break;
-          default:
-            next = 'off';
-            trackPlayerMode = RepeatMode.Off;
+        try {
+          await TrackPlayer.setRepeatMode(toTrackPlayerRepeatMode(next));
+          set({ repeatMode: next });
+        } catch (err) {
+          console.warn('Failed to set repeat mode:', err);
         }
-
-        await TrackPlayer.setRepeatMode(trackPlayerMode);
-        set({ repeatMode: next });
       },
 
       setIsPlaying: (playing) => set({ isPlaying: playing }),
@@ -330,6 +430,18 @@ export const usePlayerStore = create<PlayerStore>()(
         shuffleMode: state.shuffleMode,
         repeatMode: state.repeatMode,
       }),
+      // Saved local paths go stale when iOS moves the app container
+      // (reinstall / re-sideload), so rebuild them on every load.
+      merge: (persistedState, currentState) => {
+        const persisted = (persistedState ?? {}) as Partial<PlayerState>;
+        return {
+          ...currentState,
+          ...persisted,
+          recentlyPlayed: (persisted.recentlyPlayed ?? currentState.recentlyPlayed).map(
+            withCurrentLocalPaths
+          ),
+        };
+      },
     }
   )
 );

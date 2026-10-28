@@ -24,6 +24,7 @@ import {
   ListMusic,
   Share2,
   Download,
+  X,
 } from 'lucide-react-native';
 import { useTheme } from '../theme';
 import { typography } from '../theme/typography';
@@ -63,6 +64,7 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
   );
   const toggleFavorite = useLibraryStore((s) => s.toggleFavorite);
   const startDownload = useDownloadStore((s) => s.startDownload);
+  const cancelDownload = useDownloadStore((s) => s.cancelDownload);
   const isDownloaded = useLibraryStore((s) =>
     currentTrack ? s.isDownloaded(currentTrack.id) : false
   );
@@ -240,15 +242,26 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
       <View style={styles.bottomActions}>
         <TouchableOpacity
           onPress={() => {
-            if (currentTrack && !isDownloaded && !isDownloading) {
+            if (!currentTrack) return;
+            if (isDownloading) {
+              cancelDownload(currentTrack.id);
+            } else if (!isDownloaded) {
               startDownload(currentTrack);
             }
           }}
           style={styles.bottomAction}
-          disabled={isDownloading}
+          accessibilityRole="button"
+          accessibilityLabel={
+            isDownloading ? 'Cancel download' : isDownloaded ? 'Downloaded' : 'Download'
+          }
         >
           {isDownloading ? (
-            <ActivityIndicator size="small" color={theme.primary} />
+            <View style={styles.downloadProgress}>
+              <ActivityIndicator size="small" color={theme.primary} />
+              <View style={styles.downloadCancelIcon}>
+                <X size={10} color={theme.primary} strokeWidth={3} />
+              </View>
+            </View>
           ) : (
             <Download
               size={20}
@@ -359,5 +372,16 @@ const styles = StyleSheet.create({
   },
   bottomAction: {
     padding: spacing.sm,
+  },
+  downloadProgress: {
+    width: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  downloadCancelIcon: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
 });
