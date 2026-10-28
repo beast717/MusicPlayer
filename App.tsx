@@ -7,10 +7,12 @@ import { Navigation } from './src/navigation';
 import { setupTrackPlayer } from './src/services/trackPlayerService';
 import { ErrorBoundary } from './src/components';
 import { StreamExtractorWebView } from './src/services/StreamExtractorWebView';
+import { pruneStreamCache } from './src/services/youtube';
 
 export default function App() {
   useEffect(() => {
     setupTrackPlayer();
+    pruneStreamCache();
   }, []);
 
   return (

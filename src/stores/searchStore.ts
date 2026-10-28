@@ -26,6 +26,30 @@ interface SearchActions {
 
 type SearchStore = SearchState & SearchActions;
 
+const MAX_CACHED_QUERIES = 30;
+
+let _searchCounter = 0;
+
+// Prefixed so numeric queries like "2024" keep insertion order in the object
+function toCacheKey(query: string): string {
+  return `q:${query.trim().toLowerCase()}`;
+}
+
+/** Insert a result set, evicting the oldest queries beyond the limit. */
+function addToCache(
+  cache: Record<string, SearchResult[]>,
+  key: string,
+  results: SearchResult[]
+): Record<string, SearchResult[]> {
+  const { [key]: _, ...rest } = cache;
+  const keys = Object.keys(rest);
+  const kept = keys.slice(Math.max(0, keys.length - (MAX_CACHED_QUERIES - 1)));
+  const next: Record<string, SearchResult[]> = {};
+  for (const k of kept) next[k] = rest[k];
+  next[key] = results;
+  return next;
+}
+
 export const useSearchStore = create<SearchStore>()(
   persist(
     (set, get) => ({
@@ -39,15 +63,19 @@ export const useSearchStore = create<SearchStore>()(
       setQuery: (query: string) => set({ query }),
 
       search: async (query: string) => {
+        // Latest-wins: a slower, older search must not overwrite newer results
+        const mySearchId = ++_searchCounter;
+
         if (!query.trim()) {
           set({ results: [], isSearching: false });
           return;
         }
 
         // Check cache first
-        const cache = get().queryCache;
-        if (cache[query]) {
-          set({ results: cache[query], isSearching: false, error: null, query });
+        const cacheKey = toCacheKey(query);
+        const cached = get().queryCache[cacheKey];
+        if (cached) {
+          set({ results: cached, isSearching: false, error: null, query });
           get().addToHistory(query.trim());
           return;
         }
@@ -56,17 +84,19 @@ export const useSearchStore = create<SearchStore>()(
 
         try {
           const results = await searchYouTube(query);
-          
+          if (mySearchId !== _searchCounter) return;
+
           // Save to cache and update state
-          set((state) => ({ 
-            results, 
+          set((state) => ({
+            results,
             isSearching: false,
-            queryCache: { ...state.queryCache, [query]: results }
+            queryCache: addToCache(state.queryCache, cacheKey, results),
           }));
 
           // Add to search history
           get().addToHistory(query.trim());
         } catch (err: any) {
+          if (mySearchId !== _searchCounter) return;
           set({
             isSearching: false,
             error: err.message || 'Search failed',
@@ -75,7 +105,11 @@ export const useSearchStore = create<SearchStore>()(
         }
       },
 
-      clearResults: () => set({ results: [], query: '', error: null }),
+      clearResults: () => {
+        // Drop any in-flight search so it can't repopulate cleared results
+        _searchCounter++;
+        set({ results: [], query: '', error: null, isSearching: false });
+      },
 
       addToHistory: (query: string) => {
         set((state) => {

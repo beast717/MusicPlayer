@@ -594,6 +594,30 @@ export function invalidateStreamCache(videoId: string): void {
   }
 }
 
+/**
+ * Remove expired stream URLs and entries from older cache versions.
+ * Stream URLs are cached per video, so without this MMKV grows forever.
+ */
+export function pruneStreamCache(): number {
+  const currentPrefix = `stream_${STREAM_SOURCE_CACHE_VERSION}_`;
+  const now = Date.now();
+  let removed = 0;
+
+  for (const key of mmkvStorage.getAllKeys()) {
+    if (!key.startsWith('stream_')) continue;
+
+    const cached = key.startsWith(currentPrefix)
+      ? mmkvStorage.getObject<CachedStreamUrl>(key)
+      : undefined;
+    if (!cached || !cached.timestamp || now - cached.timestamp >= STREAM_URL_TTL) {
+      mmkvStorage.delete(key);
+      removed++;
+    }
+  }
+
+  return removed;
+}
+
 async function resolveAudioSource(
   videoId: string,
   quality: AudioQuality,
@@ -611,6 +635,13 @@ async function resolveAudioSource(
   if (cached) return cached;
 
   const errors: string[] = [];
+
+  // Only the source that is actually returned gets cached. Sources that lose
+  // the phase-1 race keep running and must not overwrite the winner.
+  const remember = (source: ResolvedAudioSource): ResolvedAudioSource => {
+    cacheAudioSource(videoId, cacheMode, quality, source);
+    return source;
+  };
 
   // Helper: attempt a stream source, returning null on failure
   const trySource = async (
@@ -640,9 +671,7 @@ async function resolveAudioSource(
           }
         }
 
-        const source = toResolvedAudioSource(stream);
-        cacheAudioSource(videoId, cacheMode, quality, source);
-        return source;
+        return toResolvedAudioSource(stream);
       }
       errors.push(
         `${name}: no suitable ${mp4Only ? 'mp4 ' : ''}audio stream found`
@@ -689,7 +718,7 @@ async function resolveAudioSource(
     }
   );
 
-  if (phase1Result) return phase1Result;
+  if (phase1Result) return remember(phase1Result);
 
   // ── Phase 2: Sequential fallbacks (heavier methods) ───────────────
 
@@ -702,7 +731,7 @@ async function resolveAudioSource(
       streamType: 'default' as const,
     }));
   });
-  if (webViewResult) return webViewResult;
+  if (webViewResult) return remember(webViewResult);
 
   // 5. Watch page scraping (limited – can't handle ciphered/SABR streams)
   const watchResult = await trySource(
@@ -710,7 +739,7 @@ async function resolveAudioSource(
     () => getStreamFromWatchPage(videoId, allowAdaptiveManifest),
     preferHls
   );
-  if (watchResult) return watchResult;
+  if (watchResult) return remember(watchResult);
 
   console.warn('All stream methods failed:', errors);
   throw new Error(

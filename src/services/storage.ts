@@ -42,6 +42,9 @@ export const mmkvStorage = {
   delete: (key: string): void => {
     storage.remove(key);
   },
+  getAllKeys: (): string[] => {
+    return storage.getAllKeys();
+  },
   clearAll: (): void => {
     storage.clearAll();
   },
