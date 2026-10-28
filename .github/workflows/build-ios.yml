@@ -43,28 +43,16 @@ jobs:
           npm run typecheck
           npm test -- --ci
 
-      - name: Patch expo-modules-core for Swift concurrency
+      # Swift concurrency fixes for expo-modules-core live in patches/ and are
+      # applied by patch-package on npm ci. Fail loudly if they didn't apply.
+      - name: Verify expo-modules-core patches
         run: |
           EMC="node_modules/expo-modules-core"
-          
-          # 1. Downgrade from Swift 6 to Swift 5.10 (avoids all strict concurrency errors)
-          sed -i '' "s|s.swift_version  = '6.0'|s.swift_version  = '5.10'|" "$EMC/ExpoModulesCore.podspec"
-          
-          # 2. Fix Swift 6-only syntax: @MainActor in conformance clause
-          # SwiftUIHostingView.swift line 45: remove @MainActor from protocol conformance
-          sed -i '' 's|, @MainActor AnyExpoSwiftUIHostingView|, AnyExpoSwiftUIHostingView|' \
-            "$EMC/ios/Core/Views/SwiftUI/SwiftUIHostingView.swift"
-          
-          # ViewDefinition.swift line 121: remove @MainActor from extension conformance
-          sed -i '' 's|extension UIView: @MainActor AnyArgument|extension UIView: AnyArgument|' \
-            "$EMC/ios/Core/Views/ViewDefinition.swift"
-          
-          # Validate patches actually applied
-          if ! grep -q "5.10" "$EMC/ExpoModulesCore.podspec"; then
-            echo "❌ Swift version patch did not apply — podspec may have changed"
+          if ! grep -q "s.swift_version  = '5.10'" "$EMC/ExpoModulesCore.podspec"             || grep -q "@MainActor AnyExpoSwiftUIHostingView" "$EMC/ios/Core/Views/SwiftUI/SwiftUIHostingView.swift"             || grep -q "extension UIView: @MainActor AnyArgument" "$EMC/ios/Core/Views/ViewDefinition.swift"; then
+            echo "❌ expo-modules-core patches are missing — check patches/ and the postinstall output"
             exit 1
           fi
-          echo "✅ Patched expo-modules-core: Swift 6.0 → 5.10 + removed @MainActor conformances"
+          echo "✅ expo-modules-core patches applied"
 
       - name: Generate native iOS project
         run: npx expo prebuild --platform ios --clean
