@@ -795,7 +795,7 @@ function pickByQuality(
   );
 }
 
-function pickBestAudioStream(
+export function pickBestAudioStream(
   streams: AudioStream[],
   quality: AudioQuality,
   preferHls: boolean,
