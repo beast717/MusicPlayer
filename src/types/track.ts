@@ -27,6 +27,8 @@ export interface AudioStream {
   quality: string;
   codec: string;
   streamType: 'default' | 'hls';
+  /** Size in bytes, when known (0 or undefined otherwise). */
+  contentLength?: number;
 }
 
 export interface ResolvedAudioSource {

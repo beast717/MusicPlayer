@@ -14,6 +14,7 @@ import {
   toTrackPlayerRepeatMode,
 } from '../stores/playerStore';
 import { getAudioPlaybackSource, invalidateStreamCache } from './youtube';
+import { resetWebViewSession } from './StreamExtractorWebView';
 import {
   buildTrackPlayerSource,
   getActiveTrackDebug,
@@ -48,8 +49,9 @@ export async function PlaybackService() {
   });
 
   // Handle playback errors with automatic retry.
-  // When YouTube's CDN rejects a stream URL (e.g. 403 due to missing PoToken),
-  // we invalidate the cached URL, re-resolve the stream, and retry once.
+  // When YouTube's CDN rejects a stream URL (e.g. 403 after its PoToken
+  // expired), we invalidate the cached URL, mint a fresh PoToken,
+  // re-resolve the stream, and retry once.
   TrackPlayer.addEventListener(Event.PlaybackError, async (event: any) => {
     const store = usePlayerStore.getState();
     const msg = event.message || event.error || 'Unknown playback error';
@@ -72,6 +74,7 @@ export async function PlaybackService() {
       try {
         // Bust the cached (broken) URL so resolveAudioSource fetches fresh
         invalidateStreamCache(activeTrackId);
+        resetWebViewSession();
 
         const freshSource = buildTrackPlayerSource(
           await getAudioPlaybackSource(activeTrackId)

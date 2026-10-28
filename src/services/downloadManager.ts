@@ -100,11 +100,11 @@ export async function downloadTrack(
     const streamUrl = await getAudioStreamUrl(track.id);
     throwIfCancelled(handle);
 
-    // Download audio
+    // Download audio. YouTube's CDN stalls requests without a Range header.
     handle.resumable = FileSystem.createDownloadResumable(
       streamUrl,
       partialPath,
-      {},
+      { headers: { Range: 'bytes=0-' } },
       (downloadProgress) => {
         const progress =
           downloadProgress.totalBytesWritten /

@@ -4,7 +4,7 @@ A free, open-source music streaming app for iOS built with React Native and Expo
 
 ## Features
 
-- **Search & Stream** — Search for any song or artist and stream audio directly via Piped/Invidious APIs
+- **Search & Stream** — Search for any song or artist and stream audio directly from YouTube, including protected label music
 - **Background Playback** — Keep listening with the screen off or while using other apps
 - **Playback Controls** — Play, pause, skip, seek, shuffle, and repeat (single track or queue)
 - **Download Songs** — Save tracks offline as M4A files with progress tracking
@@ -24,7 +24,7 @@ A free, open-source music streaming app for iOS built with React Native and Expo
 - [react-native-track-player](https://github.com/doublesymmetry/react-native-track-player) — Audio playback
 - [Zustand](https://github.com/pmndrs/zustand) — State management
 - [react-native-mmkv](https://github.com/mrousavy/react-native-mmkv) — Fast persistent storage
-- [Piped](https://github.com/TeamPiped/Piped) / [Invidious](https://github.com/iv-org/invidious) — YouTube API alternatives (no API key needed)
+- [YouTube.js](https://github.com/LuanRT/YouTube.js) + [BgUtils](https://github.com/LuanRT/BgUtils) — Stream extraction and PoToken generation, run in a hidden WebView
 - [Lucide Icons](https://lucide.dev/) — Beautiful icon set
 - TypeScript
 
@@ -77,6 +77,27 @@ npx expo prebuild --platform ios --clean
 cd ios && pod install
 xcodebuild -workspace MusicPlayer.xcworkspace -scheme MusicPlayer -configuration Release -sdk iphoneos
 ```
+
+## How Streaming Works (and Keeping It Working)
+
+YouTube only serves the first ~1 MB of protected songs (most label music) unless the request carries a **PoToken** from its BotGuard anti-bot system. Without one, those songs fail with a playback error.
+
+The app mounts a hidden WebView whose page has the `youtube.com` origin (`src/services/StreamExtractorWebView.tsx`). Inside it, `webview-extractor/index.ts`:
+
+1. uses **YouTube.js** to open a session and load YouTube's current player JS, which it uses to decipher stream signatures, and
+2. uses **BgUtils** to run BotGuard and mint a PoToken bound to that session, which goes on every stream URL.
+
+`src/services/youtube.ts` checks each stream by fetching its last byte before using it, and falls back to InnerTube's app clients for unprotected videos.
+
+`npm install` bundles the WebView code automatically (`scripts/build-webview-extractor.mjs`). Run `npm run build:extractor` to rebuild it by hand.
+
+**When songs start failing again**, YouTube has usually changed something and the libraries will already have caught up:
+
+```bash
+npm update youtubei.js bgutils-js
+```
+
+Then rebuild the IPA and re-sideload. Both projects are maintained actively and usually ship fixes within days of a YouTube change.
 
 ## License
 

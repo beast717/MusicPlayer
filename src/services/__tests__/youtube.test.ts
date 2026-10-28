@@ -15,10 +15,12 @@ jest.mock('../storage', () => ({
   },
 }));
 
+const mockExtractStreams = jest.fn();
+const mockResetSession = jest.fn();
+
 jest.mock('../StreamExtractorWebView', () => ({
-  extractStreamsViaWebView: async () => {
-    throw new Error('WebView unavailable in tests');
-  },
+  extractStreamsViaWebView: (...args: unknown[]) => mockExtractStreams(...args),
+  resetWebViewSession: () => mockResetSession(),
 }));
 
 jest.mock('../../stores/settingsStore', () => ({
@@ -28,6 +30,7 @@ jest.mock('../../stores/settingsStore', () => ({
 import {
   pickBestAudioStream,
   getAudioPlaybackSource,
+  getAudioStreamUrl,
   invalidateStreamCache,
   pruneStreamCache,
 } from '../youtube';
@@ -46,8 +49,6 @@ const mixed = [
   stream('audio/webm', 50000),
   hls,
 ];
-
-const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 beforeEach(() => {
   for (const key of Object.keys(mockKv)) delete mockKv[key];
@@ -77,45 +78,124 @@ describe('pickBestAudioStream', () => {
   });
 });
 
-describe('stream resolution cache', () => {
+describe('stream resolution', () => {
   const json = (body: unknown) => ({ ok: true, status: 200, json: async () => body });
+  const status = (code: number) => ({ ok: code >= 200 && code < 300, status: code });
+
+  const webViewStream = {
+    url: 'https://gvs/webview-m4a',
+    mimeType: 'audio/mp4',
+    bitrate: 130000,
+    quality: 'AUDIO_QUALITY_MEDIUM',
+    contentLength: 5000000,
+  };
+
+  /** Range requests to stream URLs answer with these codes; other URLs hit InnerTube. */
+  let probeStatus: Record<string, number>;
+  let innerTubeStreamingData: unknown;
 
   beforeEach(() => {
-    // InnerTube answers first with HLS; Piped and Invidious answer later with mp4
+    mockExtractStreams.mockReset();
+    mockResetSession.mockReset();
+    probeStatus = {};
+    innerTubeStreamingData = {
+      hlsManifestUrl: 'https://hls/innertube',
+      adaptiveFormats: [],
+    };
+
     global.fetch = jest.fn(async (input: any) => {
       const url = String(input);
       if (url.includes('youtubei/v1/player')) {
-        return json({
-          playabilityStatus: { status: 'OK' },
-          streamingData: { hlsManifestUrl: 'https://hls/winner', adaptiveFormats: [] },
-        });
+        return json({ playabilityStatus: { status: 'OK' }, streamingData: innerTubeStreamingData });
       }
-      if (url.includes('/streams/')) {
-        await wait(30);
-        return json({ audioStreams: [{ url: 'https://piped/loser', mimeType: 'audio/mp4', bitrate: 128000 }] });
-      }
-      if (url.includes('/api/v1/videos/')) {
-        await wait(50);
-        return json({ adaptiveFormats: [{ url: 'https://invidious/loser', type: 'audio/mp4', bitrate: '128000' }] });
-      }
+      if (url in probeStatus) return status(probeStatus[url]);
       throw new Error(`unexpected fetch ${url}`);
     }) as any;
   });
 
-  it('caches only the winning source, even after slower sources finish', async () => {
-    const source = await getAudioPlaybackSource('vid1');
-    await wait(100); // let the losing sources complete
+  it('plays the PoToken stream from the WebView after probing its last byte', async () => {
+    mockExtractStreams.mockResolvedValue([webViewStream]);
+    probeStatus[webViewStream.url] = 206;
 
+    const source = await getAudioPlaybackSource('vid1');
+
+    expect(source.url).toBe(webViewStream.url);
+    expect(mockExtractStreams).toHaveBeenCalledWith('vid1', 'TV_SIMPLY');
+    expect(global.fetch).toHaveBeenCalledWith(
+      webViewStream.url,
+      expect.objectContaining({ headers: { Range: 'bytes=4999999-4999999' } })
+    );
+    expect(mockResetSession).not.toHaveBeenCalled();
+  });
+
+  it('caches the resolved stream', async () => {
+    mockExtractStreams.mockResolvedValue([webViewStream]);
+    probeStatus[webViewStream.url] = 206;
+
+    await getAudioPlaybackSource('vid1');
+    await getAudioPlaybackSource('vid1');
+
+    expect(mockExtractStreams).toHaveBeenCalledTimes(1);
     const keys = Object.keys(mockKv).filter((k) => k.includes('vid1'));
-    expect(source.url).toBe('https://hls/winner');
     expect(keys).toHaveLength(1);
-    expect(mockKv[keys[0]].url).toBe('https://hls/winner');
+    expect(mockKv[keys[0]].url).toBe(webViewStream.url);
+  });
+
+  it('resets the WebView session and falls back when YouTube blocks its stream', async () => {
+    mockExtractStreams.mockResolvedValue([webViewStream]);
+    probeStatus[webViewStream.url] = 403;
+
+    const source = await getAudioPlaybackSource('vid1');
+
+    expect(mockExtractStreams.mock.calls.map((call) => call[1])).toEqual(['TV_SIMPLY', 'MWEB']);
+    expect(mockResetSession).toHaveBeenCalledTimes(1);
+    expect(source.url).toBe('https://hls/innertube');
+  });
+
+  it('keeps the WebView session when the video itself is unavailable', async () => {
+    mockExtractStreams.mockRejectedValue(new Error('TV_SIMPLY: ERROR This video is unavailable'));
+
+    await getAudioPlaybackSource('vid1');
+
+    expect(mockResetSession).not.toHaveBeenCalled();
+  });
+
+  it('rejects fallback streams that stop after the first megabyte', async () => {
+    mockExtractStreams.mockRejectedValue(new Error('WebView unavailable'));
+    innerTubeStreamingData = {
+      adaptiveFormats: [
+        { url: 'https://gvs/ios-m4a', mimeType: 'audio/mp4', bitrate: 130000, contentLength: '5000000' },
+      ],
+    };
+    probeStatus['https://gvs/ios-m4a'] = 403;
+
+    await expect(getAudioPlaybackSource('vid1')).rejects.toThrow(/InnerTube: stream blocked \(HTTP 403\)/);
+    expect(Object.keys(mockKv).filter((k) => k.includes('vid1'))).toEqual([]);
+  });
+
+  it('accepts a 416 probe when the stream size is unknown (file shorter than the probe)', async () => {
+    mockExtractStreams.mockResolvedValue([{ ...webViewStream, contentLength: 0 }]);
+    probeStatus[webViewStream.url] = 416;
+
+    const source = await getAudioPlaybackSource('vid1');
+
+    expect(source.url).toBe(webViewStream.url);
+  });
+
+  it('downloads only accept mp4 streams', async () => {
+    const webm = { ...webViewStream, url: 'https://gvs/webm', mimeType: 'audio/webm', bitrate: 160000 };
+    mockExtractStreams.mockResolvedValue([webm, webViewStream]);
+    probeStatus[webViewStream.url] = 206;
+
+    expect(await getAudioStreamUrl('vid1')).toBe(webViewStream.url);
   });
 
   it('invalidateStreamCache clears every mode and quality', async () => {
+    mockExtractStreams.mockResolvedValue([webViewStream]);
+    probeStatus[webViewStream.url] = 206;
     await getAudioPlaybackSource('vid1', 'low');
     await getAudioPlaybackSource('vid1', 'high');
-    await wait(100);
+    await getAudioStreamUrl('vid1', 'high');
 
     invalidateStreamCache('vid1');
 
@@ -126,13 +206,13 @@ describe('stream resolution cache', () => {
 describe('pruneStreamCache', () => {
   it('removes expired, old-version and broken entries and keeps the rest', () => {
     const now = Date.now();
-    mockKv['stream_v4_playback_abc'] = { url: 'x', timestamp: now };
-    mockKv['stream_v5_playback_high_expired'] = { url: 'x', timestamp: now - 46 * 60 * 1000 };
-    mockKv['stream_v5_direct_low_broken'] = undefined;
-    mockKv['stream_v5_playback_high_fresh'] = { url: 'x', timestamp: now };
+    mockKv['stream_v5_playback_high_abc'] = { url: 'x', timestamp: now };
+    mockKv['stream_v6_playback_high_expired'] = { url: 'x', timestamp: now - 46 * 60 * 1000 };
+    mockKv['stream_v6_direct_low_broken'] = undefined;
+    mockKv['stream_v6_playback_high_fresh'] = { url: 'x', timestamp: now };
     mockKv['library-store'] = '{}';
 
     expect(pruneStreamCache()).toBe(3);
-    expect(Object.keys(mockKv).sort()).toEqual(['library-store', 'stream_v5_playback_high_fresh']);
+    expect(Object.keys(mockKv).sort()).toEqual(['library-store', 'stream_v6_playback_high_fresh']);
   });
 });

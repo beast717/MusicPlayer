@@ -6,7 +6,7 @@ import {
 } from '../utils/constants';
 import { mmkvStorage } from './storage';
 import { useSettingsStore } from '../stores/settingsStore';
-import { extractStreamsViaWebView } from './StreamExtractorWebView';
+import { extractStreamsViaWebView, resetWebViewSession } from './StreamExtractorWebView';
 
 // ─── Helpers ────────────────────────────────────────────────────────
 
@@ -130,7 +130,13 @@ export async function searchYouTube(
   }
 }
 
-// ─── Audio Stream Extraction (watch page scraping) ──────────────────
+// ─── Audio Stream Extraction ────────────────────────────────────────
+// YouTube serves only the first ~1 MB of protected songs (label music) unless
+// the stream URL carries a BotGuard PoToken. The hidden WebView
+// (StreamExtractorWebView) mints one and returns ready-to-play URLs; InnerTube's
+// app clients are kept as a fallback for unprotected videos. Every direct
+// stream is probed at its last byte before use, so a blocked URL is never
+// handed to the player or cached.
 
 interface CachedStreamUrl {
   url: string;
@@ -139,17 +145,19 @@ interface CachedStreamUrl {
   timestamp: number;
 }
 
-const STREAM_SOURCE_CACHE_VERSION = 'v5';
+const STREAM_SOURCE_CACHE_VERSION = 'v6';
 
 type AudioResolveMode = 'direct' | 'playback';
 
 const AUDIO_QUALITIES: AudioQuality[] = ['low', 'medium', 'high'];
 
+/** InnerTube clients the WebView tries, in order. TV_SIMPLY accepts the web PoToken. */
+const WEBVIEW_CLIENTS = ['TV_SIMPLY', 'MWEB'];
+
 interface ResolveAudioOptions {
   allowAdaptiveManifest?: boolean;
   preferHls?: boolean;
   cacheMode: AudioResolveMode;
-  testDirectStreams?: boolean;
   /** Only accept mp4/m4a audio (downloads are saved as .m4a, and iOS can't play webm). */
   mp4Only?: boolean;
 }
@@ -225,6 +233,7 @@ function extractAudioStreamsFromStreamingData(
         quality: f.audioQuality || f.quality || '',
         codec: f.mimeType?.match(/codecs="([^"]+)"/)?.[1] || '',
         streamType: 'default',
+        contentLength: Number(f.contentLength) || 0,
       };
     })
     .filter((stream) => stream.url !== '');
@@ -245,73 +254,8 @@ function extractAudioStreamsFromStreamingData(
 }
 
 /**
- * Extract ytInitialPlayerResponse from a YouTube watch page.
- * YouTube embeds the full player config (including stream URLs) in the HTML.
- */
-function extractPlayerResponse(html: string): any | null {
-  const patterns = [
-    /var\s+ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var|<\/script)/s,
-    /ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;\s*(?:var|<\/script)/s,
-  ];
-
-  for (const pattern of patterns) {
-    const match = html.match(pattern);
-    if (match?.[1]) {
-      try {
-        return JSON.parse(match[1]);
-      } catch {
-        continue;
-      }
-    }
-  }
-
-  return null;
-}
-
-async function getStreamFromWatchPage(
-  videoId: string,
-  allowAdaptiveManifest: boolean
-): Promise<AudioStream[]> {
-  const watchUrl = `https://www.youtube.com/watch?v=${videoId}&has_verified=1`;
-  const response = await fetchWithTimeout(
-    watchUrl,
-    {
-      headers: {
-        'User-Agent':
-          'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        Accept:
-          'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.5',
-      },
-    },
-    15000
-  );
-
-  if (!response.ok) {
-    throw new Error(`Watch page returned ${response.status}`);
-  }
-
-  const html = await response.text();
-  const playerResponse = extractPlayerResponse(html);
-
-  if (!playerResponse) {
-    throw new Error('Could not extract player data from watch page');
-  }
-
-  const status = playerResponse?.playabilityStatus?.status;
-  if (status && status !== 'OK') {
-    throw new Error(
-      `Video not playable: ${playerResponse.playabilityStatus?.reason || status}`
-    );
-  }
-
-  return extractAudioStreamsFromStreamingData(playerResponse?.streamingData, {
-    allowAdaptiveManifest,
-  });
-}
-
-/**
- * Fallback: try InnerTube player API with alternative client identities.
+ * Fallback: InnerTube player API with app client identities (no PoToken).
+ * Only unprotected videos play in full this way.
  */
 interface InnerTubeResult {
   streams: AudioStream[];
@@ -430,155 +374,31 @@ function toResolvedAudioSource(stream: AudioStream): ResolvedAudioSource {
   };
 }
 
-// ─── Piped API Fallback ─────────────────────────────────────────────
+// Used when a stream's size is unknown: past the ~1 MB YouTube serves
+// without a valid PoToken.
+const PROBE_OFFSET_WITHOUT_LENGTH = 2_000_000;
 
-const PIPED_API_INSTANCES = [
-  'https://pipedapi.kavin.rocks',
-  'https://pipedapi.adminforge.de',
-  'https://pipedapi.r4fo.com',
-  'https://pipedapi.moomoo.me',
-  'https://api-piped.mha.fi',
-  'https://pipedapi.rivo.lol',
-  'https://pipedapi.syncpundit.io',
-  'https://pipedapi.in.projectsegfau.lt',
-  'https://pipedapi.leptons.xyz',
-];
+class StreamRejectedError extends Error {}
 
-// ─── Invidious API Fallback ─────────────────────────────────────────
+/**
+ * Throws unless the whole stream is fetchable. YouTube answers the start of a
+ * protected stream even without a PoToken, so the probe reads the last byte.
+ */
+async function verifyFullStreamAccess(stream: AudioStream): Promise<void> {
+  if (stream.streamType === 'hls') return;
 
-const INVIDIOUS_INSTANCES = [
-  'https://inv.nadeko.net',
-  'https://invidious.fdn.fr',
-  'https://vid.puffyan.us',
-  'https://invidious.nerdvpn.de',
-  'https://inv.tux.pizza',
-  'https://invidious.privacyredirect.com',
-  'https://iv.ggtyler.dev',
-];
+  const offset = stream.contentLength
+    ? stream.contentLength - 1
+    : PROBE_OFFSET_WITHOUT_LENGTH;
+  const response = await fetchWithTimeout(
+    stream.url,
+    { headers: { Range: `bytes=${offset}-${offset}` } },
+    5000
+  );
 
-// ─── Instance Health Tracking ───────────────────────────────────────
-// Remember which instances responded recently so we try them first
-// instead of wasting 12s per dead instance.
-
-const INSTANCE_HEALTH_TTL = 10 * 60 * 1000; // 10 minutes
-
-const instanceHealth = new Map<string, { ok: boolean; timestamp: number }>();
-
-function recordInstanceHealth(instance: string, ok: boolean): void {
-  instanceHealth.set(instance, { ok, timestamp: Date.now() });
-}
-
-function sortByHealth(instances: string[]): string[] {
-  const now = Date.now();
-  return [...instances].sort((a, b) => {
-    const healthA = instanceHealth.get(a);
-    const healthB = instanceHealth.get(b);
-
-    const aHealthy =
-      healthA && now - healthA.timestamp < INSTANCE_HEALTH_TTL
-        ? healthA.ok
-        : null;
-    const bHealthy =
-      healthB && now - healthB.timestamp < INSTANCE_HEALTH_TTL
-        ? healthB.ok
-        : null;
-
-    // Known-healthy first, unknown middle, known-dead last
-    const scoreA = aHealthy === true ? 0 : aHealthy === null ? 1 : 2;
-    const scoreB = bHealthy === true ? 0 : bHealthy === null ? 1 : 2;
-    return scoreA - scoreB;
-  });
-}
-
-async function getStreamFromPipedAPI(
-  videoId: string
-): Promise<AudioStream[]> {
-  for (const instance of sortByHealth(PIPED_API_INSTANCES).slice(0, 3)) {
-    try {
-      const response = await fetchWithTimeout(
-        `${instance}/streams/${videoId}`,
-        {
-          headers: {
-            Accept: 'application/json',
-          },
-        },
-        6000
-      );
-
-      if (!response.ok) {
-        recordInstanceHealth(instance, false);
-        continue;
-      }
-
-      const data = await response.json();
-      const audioStreams: AudioStream[] = (data.audioStreams || [])
-        .filter((s: any) => s.url && s.url.length > 0)
-        .map((s: any) => ({
-          url: s.url,
-          mimeType: (s.mimeType || s.format || 'audio/mp4').split(';')[0],
-          bitrate: s.bitrate || 0,
-          quality: s.quality || '',
-          codec: s.codec || '',
-        }));
-
-      if (audioStreams.length > 0) {
-        recordInstanceHealth(instance, true);
-        return audioStreams;
-      }
-    } catch {
-      recordInstanceHealth(instance, false);
-      continue;
-    }
-  }
-
-  return [];
-}
-
-async function getStreamFromInvidious(
-  videoId: string
-): Promise<AudioStream[]> {
-  for (const instance of sortByHealth(INVIDIOUS_INSTANCES).slice(0, 3)) {
-    try {
-      const response = await fetchWithTimeout(
-        `${instance}/api/v1/videos/${videoId}`,
-        {
-          headers: {
-            Accept: 'application/json',
-          },
-        },
-        6000
-      );
-
-      if (!response.ok) {
-        recordInstanceHealth(instance, false);
-        continue;
-      }
-
-      const data = await response.json();
-      const allFormats = data.adaptiveFormats || [];
-
-      const audioStreams: AudioStream[] = allFormats
-        .filter((f: any) => f.type && f.type.startsWith('audio/'))
-        .map((f: any) => ({
-          url: f.url || '',
-          mimeType: (f.type || 'audio/mp4').split(';')[0],
-          bitrate: f.bitrate ? parseInt(f.bitrate, 10) : 0,
-          quality: f.audioQuality || '',
-          codec: f.encoding || '',
-        }))
-        .filter((s: AudioStream) => s.url !== '');
-
-      if (audioStreams.length > 0) {
-        recordInstanceHealth(instance, true);
-        return audioStreams;
-      }
-    } catch {
-      recordInstanceHealth(instance, false);
-      continue;
-    }
-  }
-
-  return [];
+  // 416 without a known size: the file ends before the probe offset, so all of it is servable
+  if (response.ok || (response.status === 416 && !stream.contentLength)) return;
+  throw new StreamRejectedError(`stream blocked (HTTP ${response.status})`);
 }
 
 /**
@@ -627,7 +447,6 @@ async function resolveAudioSource(
     allowAdaptiveManifest = false,
     preferHls = false,
     cacheMode,
-    testDirectStreams = false,
     mp4Only = false,
   } = options;
 
@@ -635,15 +454,9 @@ async function resolveAudioSource(
   if (cached) return cached;
 
   const errors: string[] = [];
+  let webViewStreamRejected = false;
 
-  // Only the source that is actually returned gets cached. Sources that lose
-  // the phase-1 race keep running and must not overwrite the winner.
-  const remember = (source: ResolvedAudioSource): ResolvedAudioSource => {
-    cacheAudioSource(videoId, cacheMode, quality, source);
-    return source;
-  };
-
-  // Helper: attempt a stream source, returning null on failure
+  // Attempt a stream source, returning null on failure
   const trySource = async (
     name: string,
     fn: () => Promise<AudioStream[]>,
@@ -652,94 +465,54 @@ async function resolveAudioSource(
     try {
       const streams = await fn();
       const stream = pickBestAudioStream(streams, quality, usePreferHls, mp4Only);
-
-      if (stream) {
-        // If testing direct streams is required, perform a lightweight check to
-        // verify the Google CDN doesn't immediately 403 (due to lacking valid bot signatures).
-        if (testDirectStreams && stream.streamType !== 'hls') {
-          try {
-            const testRes = await fetchWithTimeout(stream.url, {
-              method: 'GET',
-              headers: { Range: 'bytes=0-0' }, // Lightweight grab
-            }, 3000);
-            if (!testRes.ok && testRes.status !== 206) {
-               throw new Error(`HTTP ${testRes.status}`);
-            }
-          } catch (e: any) {
-            errors.push(`${name} url validation failed: ${e.message}`);
-            return null; // Reject stream, fall back!
-          }
-        }
-
-        return toResolvedAudioSource(stream);
+      if (!stream) {
+        errors.push(
+          `${name}: no suitable ${mp4Only ? 'mp4 ' : ''}audio stream found`
+        );
+        return null;
       }
-      errors.push(
-        `${name}: no suitable ${mp4Only ? 'mp4 ' : ''}audio stream found`
-      );
+
+      await verifyFullStreamAccess(stream);
+      const source = toResolvedAudioSource(stream);
+      cacheAudioSource(videoId, cacheMode, quality, source);
+      return source;
     } catch (err: any) {
+      if (err instanceof StreamRejectedError && name.startsWith('WebView')) {
+        webViewStreamRejected = true;
+      }
       errors.push(`${name}: ${err.message}`);
+      return null;
     }
-    return null;
   };
 
-  // ── Phase 1: Race Piped, Invidious, and InnerTube in parallel ─────
-  // Whichever returns a valid stream first wins immediately.
-  const phase1Result = await new Promise<ResolvedAudioSource | null>(
-    (resolve) => {
-      let settled = false;
-      let pending = 3;
+  // 1. WebView: PoToken-authorized streams, needed for protected songs
+  for (const client of WEBVIEW_CLIENTS) {
+    const source = await trySource(`WebView ${client}`, async () =>
+      (await extractStreamsViaWebView(videoId, client)).map((stream) => ({
+        ...stream,
+        codec: '',
+        streamType: 'default' as const,
+      }))
+    );
+    if (source) return source;
+  }
 
-      const onResult = (source: ResolvedAudioSource | null) => {
-        if (settled) return;
-        if (source) {
-          settled = true;
-          resolve(source);
-        } else {
-          pending--;
-          if (pending === 0) {
-            resolve(null);
-          }
-        }
-      };
+  // YouTube stopped accepting the current token; mint a fresh one next time
+  if (webViewStreamRejected) resetWebViewSession();
 
-      trySource('Piped API', () => getStreamFromPipedAPI(videoId)).then(onResult);
-      trySource('Invidious API', () => getStreamFromInvidious(videoId)).then(onResult);
-      trySource(
-        'InnerTube',
-        async () => {
-          const result = await getStreamFromInnerTube(videoId, allowAdaptiveManifest);
-          if (result.streams.length === 0 && result.diagnostics.length > 0) {
-            throw new Error(result.diagnostics.join('; '));
-          }
-          return result.streams;
-        },
-        preferHls
-      ).then(onResult);
-    }
-  );
-
-  if (phase1Result) return remember(phase1Result);
-
-  // ── Phase 2: Sequential fallbacks (heavier methods) ───────────────
-
-  // 4. WebView extraction — runs YouTube's real player with BotGuard/PoToken.
-  const webViewResult = await trySource('WebView', async () => {
-    const wvStreams = await extractStreamsViaWebView(videoId);
-    return wvStreams.map((stream) => ({
-      ...stream,
-      codec: '',
-      streamType: 'default' as const,
-    }));
-  });
-  if (webViewResult) return remember(webViewResult);
-
-  // 5. Watch page scraping (limited – can't handle ciphered/SABR streams)
-  const watchResult = await trySource(
-    'Watch page',
-    () => getStreamFromWatchPage(videoId, allowAdaptiveManifest),
+  // 2. InnerTube app clients: only unprotected videos play in full
+  const innerTubeSource = await trySource(
+    'InnerTube',
+    async () => {
+      const result = await getStreamFromInnerTube(videoId, allowAdaptiveManifest);
+      if (result.streams.length === 0 && result.diagnostics.length > 0) {
+        throw new Error(result.diagnostics.join('; '));
+      }
+      return result.streams;
+    },
     preferHls
   );
-  if (watchResult) return remember(watchResult);
+  if (innerTubeSource) return innerTubeSource;
 
   console.warn('All stream methods failed:', errors);
   throw new Error(
@@ -753,8 +526,8 @@ export async function getAudioPlaybackSource(
 ): Promise<ResolvedAudioSource> {
   return resolveAudioSource(videoId, quality, {
     allowAdaptiveManifest: true,
-    // Prefer HLS: AVPlayer handles it natively and YouTube serves it reliably.
-    // Direct mp4 URLs from YouTube CDN often get blocked without a PoToken.
+    // For the InnerTube fallback: AVPlayer handles HLS natively and those
+    // manifests play in full where they are offered.
     preferHls: true,
     cacheMode: 'playback',
   });
@@ -768,7 +541,6 @@ export async function getAudioStreamUrl(
     allowAdaptiveManifest: false,
     preferHls: false,
     cacheMode: 'direct',
-    testDirectStreams: true,
     mp4Only: true,
   });
   return source.url;

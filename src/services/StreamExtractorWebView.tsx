@@ -1,468 +1,233 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Platform, StyleSheet, View } from 'react-native';
 import WebView, { WebViewMessageEvent } from 'react-native-webview';
+import { WEBVIEW_EXTRACTOR_JS } from './generated/webviewExtractor';
 
-interface StreamResult {
+/**
+ * Hidden WebView that resolves YouTube audio streams with a BotGuard PoToken.
+ * The page logic lives in webview-extractor/index.ts; this side mounts it,
+ * passes requests in, and performs fetches the page can't make itself.
+ */
+
+export interface WebViewStream {
   url: string;
   mimeType: string;
   bitrate: number;
   quality: string;
+  contentLength: number;
 }
 
+type PageMessage =
+  | { type: 'ready' }
+  | { type: 'log'; message: string }
+  | { type: 'resolve-result'; id: number; ok: true; streams: WebViewStream[] }
+  | { type: 'resolve-result'; id: number; ok: false; error: string }
+  | {
+      type: 'fetch';
+      id: number;
+      url: string;
+      method: string;
+      headers: Record<string, string>;
+      body?: string;
+    };
+
 interface PendingRequest {
-  videoId: string;
-  resolve: (streams: StreamResult[]) => void;
+  resolve: (streams: WebViewStream[]) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
-interface DiagnosticState {
-  phase: 'idle' | 'bootstrap' | 'embed';
-  loadStarts: number;
-  loadEnds: number;
-  sawHook: boolean;
-  lastEvent: string;
-  lastUrl: string;
-}
+// The first request also waits for BotGuard and YouTube's player JS
+const EXTRACT_TIMEOUT = 30000;
 
-interface ActiveRequest {
-  videoId: string;
-  phase: 'bootstrap' | 'embed';
-}
+// Gives the page the youtube.com origin, so its requests to YouTube are same-origin
+const PAGE_ORIGIN = 'https://www.youtube.com/';
+const PAGE_HTML = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body></body></html>';
 
-let pendingRequest: PendingRequest | null = null;
-let requestVideoId: ((videoId: string) => void) | null = null;
-let dismissWebView: (() => void) | null = null;
-let getDiagnostics: (() => string) | null = null;
-
-const EXTRACT_TIMEOUT = 25000;
-
-const BOOTSTRAP_HTML = `
-<!DOCTYPE html>
-<html>
-  <head>
-    <meta charset="utf-8" />
-    <meta
-      name="viewport"
-      content="width=device-width, initial-scale=1, maximum-scale=1"
-    />
-  </head>
-  <body style="margin:0;background:#000;"></body>
-</html>
-`;
-
-const EMBED_USER_AGENT =
+const USER_AGENT =
   Platform.OS === 'ios'
     ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1'
     : 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Mobile Safari/537.36';
 
-const INTERCEPT_JS = `
-(function () {
-  if (window.__musicPlayerInterceptorInstalled) {
-    return true;
+// Hosts the page may ask the app to fetch on its behalf
+const BRIDGE_FETCH_HOSTS = ['youtube.com', 'googlevideo.com', 'google.com', 'googleapis.com'];
+
+let isMounted = false;
+let sendToPage: ((message: object) => void) | null = null;
+let queuedMessages: object[] = [];
+const pendingRequests = new Map<number, PendingRequest>();
+let nextRequestId = 1;
+
+function send(message: object): void {
+  if (sendToPage) {
+    sendToPage(message);
+  } else {
+    queuedMessages.push(message);
   }
-  window.__musicPlayerInterceptorInstalled = true;
-
-  var post = function (payload) {
-    try {
-      window.ReactNativeWebView.postMessage(JSON.stringify(payload));
-    } catch (error) {}
-  };
-
-  var normalize = function (data, source) {
-    var formats = (data.streamingData && data.streamingData.adaptiveFormats) || [];
-    var audio = [];
-    for (var i = 0; i < formats.length; i++) {
-      var format = formats[i];
-      if (format.url && format.mimeType && format.mimeType.indexOf('audio/') === 0) {
-        audio.push({
-          url: format.url,
-          mimeType: format.mimeType.split(';')[0],
-          bitrate: format.bitrate || 0,
-          quality: format.audioQuality || ''
-        });
-      }
-    }
-
-    return {
-      type: 'streams',
-      source: source,
-      status: data.playabilityStatus && data.playabilityStatus.status,
-      reason: (data.playabilityStatus && data.playabilityStatus.reason) || '',
-      streams: audio
-    };
-  };
-
-  var sendIfPresent = function (data, source) {
-    if (!data) {
-      return false;
-    }
-    var payload = normalize(data, source);
-    if (payload.status || payload.streams.length > 0) {
-      post(payload);
-      return true;
-    }
-    return false;
-  };
-
-  var inspectGlobals = function () {
-    try {
-      if (sendIfPresent(window.ytInitialPlayerResponse, 'ytInitialPlayerResponse')) {
-        return true;
-      }
-    } catch (error) {}
-
-    try {
-      var config = window.ytplayer && window.ytplayer.config;
-      var playerResponse = config && config.args && config.args.player_response;
-      if (playerResponse) {
-        if (sendIfPresent(JSON.parse(playerResponse), 'ytplayer.config')) {
-          return true;
-        }
-      }
-    } catch (error) {}
-
-    return false;
-  };
-
-  post({ type: 'hook-installed', href: window.location.href });
-  inspectGlobals();
-
-  var originalOpen = XMLHttpRequest.prototype.open;
-  var originalSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function (method, url) {
-    this.__musicPlayerUrl = url;
-    return originalOpen.apply(this, arguments);
-  };
-  XMLHttpRequest.prototype.send = function () {
-    var xhr = this;
-    var url = xhr.__musicPlayerUrl || '';
-    if (url.indexOf('/youtubei/v1/player') !== -1) {
-      post({ type: 'network', method: 'xhr', url: url });
-      xhr.addEventListener('load', function () {
-        try {
-          sendIfPresent(JSON.parse(xhr.responseText), 'xhr');
-        } catch (error) {
-          post({ type: 'log', message: 'xhr-parse-failed' });
-        }
-      });
-    }
-    return originalSend.apply(this, arguments);
-  };
-
-  var originalFetch = window.fetch;
-  window.fetch = function (input) {
-    var url = typeof input === 'string' ? input : (input && input.url) || '';
-    var responsePromise = originalFetch.apply(this, arguments);
-    if (url.indexOf('/youtubei/v1/player') !== -1) {
-      post({ type: 'network', method: 'fetch', url: url });
-      responsePromise.then(function (response) {
-        return response.clone().json().then(function (data) {
-          sendIfPresent(data, 'fetch');
-        });
-      }).catch(function () {});
-    }
-    return responsePromise;
-  };
-
-  document.addEventListener('readystatechange', function () {
-    post({ type: 'state', readyState: document.readyState, href: window.location.href });
-    if (document.readyState === 'interactive' || document.readyState === 'complete') {
-      inspectGlobals();
-    }
-  });
-
-  window.addEventListener('load', function () {
-    post({ type: 'page-load', href: window.location.href });
-    inspectGlobals();
-  });
-
-  window.setInterval(function () {
-    inspectGlobals();
-  }, 750);
-})();
-true;
-`;
-
-const TRIGGER_PLAYER_JS = `
-(function () {
-  if (window.__musicPlayerTriggerInstalled) {
-    return true;
-  }
-  window.__musicPlayerTriggerInstalled = true;
-
-  var post = function (payload) {
-    try {
-      window.ReactNativeWebView.postMessage(JSON.stringify(payload));
-    } catch (error) {}
-  };
-
-  var poke = function () {
-    try {
-      var video = document.querySelector('video');
-      if (video) {
-        video.muted = true;
-        var promise = video.play();
-        if (promise && promise.catch) {
-          promise.catch(function () {});
-        }
-      }
-    } catch (error) {}
-
-    try {
-      var playButton = document.querySelector(
-        '.ytp-large-play-button, .ytp-cued-thumbnail-overlay, button[aria-label="Play"]'
-      );
-      if (playButton && playButton.click) {
-        playButton.click();
-      }
-    } catch (error) {}
-
-    post({ type: 'poke', href: window.location.href });
-  };
-
-  poke();
-  window.setTimeout(poke, 500);
-  window.setTimeout(poke, 1500);
-})();
-true;
-`;
-
-function resetDiagnostics(): DiagnosticState {
-  return {
-    phase: 'idle',
-    loadStarts: 0,
-    loadEnds: 0,
-    sawHook: false,
-    lastEvent: 'idle',
-    lastUrl: '',
-  };
 }
 
-function formatDiagnostics(state: DiagnosticState): string {
-  return [
-    `phase=${state.phase}`,
-    `loadStarts=${state.loadStarts}`,
-    `loadEnds=${state.loadEnds}`,
-    `hook=${state.sawHook ? 'yes' : 'no'}`,
-    `lastEvent=${state.lastEvent}`,
-    `lastUrl=${state.lastUrl || 'none'}`,
-  ].join(' ');
+function rejectAll(reason: string): void {
+  for (const [id, request] of pendingRequests) {
+    clearTimeout(request.timer);
+    request.reject(new Error(reason));
+    pendingRequests.delete(id);
+  }
 }
 
+/** Resolve a video's audio streams (PoToken attached) using the given InnerTube client. */
 export function extractStreamsViaWebView(
-  videoId: string
-): Promise<StreamResult[]> {
-  return new Promise((resolve, reject) => {
-    if (pendingRequest) {
-      clearTimeout(pendingRequest.timer);
-      pendingRequest.reject(new Error('Cancelled'));
-      pendingRequest = null;
-    }
+  videoId: string,
+  client: string
+): Promise<WebViewStream[]> {
+  if (!isMounted) {
+    return Promise.reject(new Error('StreamExtractor not mounted'));
+  }
 
+  return new Promise((resolve, reject) => {
+    const id = nextRequestId++;
     const timer = setTimeout(() => {
-      const details = getDiagnostics ? getDiagnostics() : 'diagnostics=unavailable';
-      pendingRequest = null;
-      if (dismissWebView) {
-        dismissWebView();
-      }
-      reject(new Error(`WebView timed out (${details})`));
+      pendingRequests.delete(id);
+      reject(new Error(`WebView timed out after ${EXTRACT_TIMEOUT / 1000}s`));
     }, EXTRACT_TIMEOUT);
 
-    pendingRequest = { videoId, resolve, reject, timer };
-
-    if (!requestVideoId) {
-      clearTimeout(timer);
-      pendingRequest = null;
-      reject(new Error('StreamExtractor not mounted'));
-      return;
-    }
-
-    requestVideoId(videoId);
+    pendingRequests.set(id, { resolve, reject, timer });
+    send({ type: 'resolve', id, videoId, client });
   });
+}
+
+/** Drop the page's session so the next request mints a fresh PoToken. */
+export function resetWebViewSession(): void {
+  if (isMounted) send({ type: 'reset' });
+}
+
+function isBridgeFetchAllowed(url: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(url);
+    return (
+      protocol === 'https:' &&
+      BRIDGE_FETCH_HOSTS.some((host) => hostname === host || hostname.endsWith(`.${host}`))
+    );
+  } catch {
+    return false;
+  }
+}
+
+async function performBridgeFetch(
+  message: Extract<PageMessage, { type: 'fetch' }>
+): Promise<object> {
+  if (!isBridgeFetchAllowed(message.url)) {
+    return { type: 'fetch-result', id: message.id, ok: false, error: 'Host not allowed' };
+  }
+  try {
+    const response = await fetch(message.url, {
+      method: message.method,
+      headers: message.headers,
+      body: message.body,
+      credentials: 'omit',
+    });
+    const headers: Record<string, string> = {};
+    response.headers.forEach((value, key) => {
+      headers[key] = value;
+    });
+    return {
+      type: 'fetch-result',
+      id: message.id,
+      ok: true,
+      status: response.status,
+      headers,
+      body: await response.text(),
+    };
+  } catch (err) {
+    return {
+      type: 'fetch-result',
+      id: message.id,
+      ok: false,
+      error: err instanceof Error ? err.message : 'Fetch failed',
+    };
+  }
 }
 
 export function StreamExtractorWebView() {
-  const [activeRequest, setActiveRequest] = useState<ActiveRequest | null>(null);
   const webViewRef = useRef<WebView>(null);
-  const activeRequestRef = useRef<ActiveRequest | null>(null);
-  const diagnosticsRef = useRef<DiagnosticState>(resetDiagnostics());
+  // Bumped to remount the WebView after its content process dies
+  const [instance, setInstance] = useState(0);
 
   useEffect(() => {
-    requestVideoId = (videoId: string) => {
-      diagnosticsRef.current = {
-        ...resetDiagnostics(),
-        phase: 'bootstrap',
-        lastEvent: 'request',
-      };
-      setActiveRequest({ videoId, phase: 'bootstrap' });
-    };
-
-    dismissWebView = () => {
-      diagnosticsRef.current = resetDiagnostics();
-      setActiveRequest(null);
-    };
-
-    getDiagnostics = () => formatDiagnostics(diagnosticsRef.current);
-
+    isMounted = true;
     return () => {
-      requestVideoId = null;
-      dismissWebView = null;
-      getDiagnostics = null;
+      isMounted = false;
+      sendToPage = null;
+      queuedMessages = [];
+      rejectAll('StreamExtractor unmounted');
     };
   }, []);
 
-  useEffect(() => {
-    activeRequestRef.current = activeRequest;
-    diagnosticsRef.current.phase = activeRequest?.phase ?? 'idle';
-  }, [activeRequest]);
-
-  const closeWithError = useCallback((message: string) => {
-    if (!pendingRequest) {
-      setActiveRequest(null);
-      return;
-    }
-
-    const req = pendingRequest;
-    clearTimeout(req.timer);
-    pendingRequest = null;
-    const details = formatDiagnostics(diagnosticsRef.current);
-    setActiveRequest(null);
-    req.reject(new Error(`${message} (${details})`));
+  const deliver = useCallback((message: object) => {
+    webViewRef.current?.injectJavaScript(
+      `window.__musicPlayerExtractor && window.__musicPlayerExtractor.receive(${JSON.stringify(message)}); true;`
+    );
   }, []);
 
-  const handleMessage = useCallback((event: WebViewMessageEvent) => {
-    try {
-      const msg = JSON.parse(event.nativeEvent.data);
-
-      if (msg.type === 'hook-installed') {
-        diagnosticsRef.current.sawHook = true;
-        diagnosticsRef.current.lastEvent = 'hook-installed';
-        diagnosticsRef.current.lastUrl = msg.href || diagnosticsRef.current.lastUrl;
+  const handleMessage = useCallback(
+    (event: WebViewMessageEvent) => {
+      let message: PageMessage;
+      try {
+        message = JSON.parse(event.nativeEvent.data);
+      } catch {
         return;
       }
 
-      if (msg.type === 'network') {
-        diagnosticsRef.current.lastEvent = `${msg.method || 'network'}:/player`;
-        diagnosticsRef.current.lastUrl = msg.url || diagnosticsRef.current.lastUrl;
-        return;
+      switch (message.type) {
+        case 'ready': {
+          sendToPage = deliver;
+          const queued = queuedMessages;
+          queuedMessages = [];
+          queued.forEach(deliver);
+          break;
+        }
+        case 'resolve-result': {
+          const request = pendingRequests.get(message.id);
+          if (!request) return;
+          pendingRequests.delete(message.id);
+          clearTimeout(request.timer);
+          if (message.ok) {
+            request.resolve(message.streams);
+          } else {
+            request.reject(new Error(message.error));
+          }
+          break;
+        }
+        case 'fetch':
+          performBridgeFetch(message).then(deliver);
+          break;
+        case 'log':
+          console.warn('[StreamExtractor]', message.message);
+          break;
       }
+    },
+    [deliver]
+  );
 
-      if (msg.type === 'page-load') {
-        diagnosticsRef.current.lastEvent = 'page-load';
-        diagnosticsRef.current.lastUrl = msg.href || diagnosticsRef.current.lastUrl;
-        return;
-      }
-
-      if (msg.type === 'state') {
-        diagnosticsRef.current.lastEvent = `ready:${msg.readyState || 'unknown'}`;
-        diagnosticsRef.current.lastUrl = msg.href || diagnosticsRef.current.lastUrl;
-        return;
-      }
-
-      if (msg.type === 'poke') {
-        diagnosticsRef.current.lastEvent = 'poke';
-        diagnosticsRef.current.lastUrl = msg.href || diagnosticsRef.current.lastUrl;
-        return;
-      }
-
-      if (msg.type === 'log') {
-        diagnosticsRef.current.lastEvent = msg.message || 'log';
-        return;
-      }
-
-      if (msg.type !== 'streams' || !pendingRequest) {
-        return;
-      }
-
-      const req = pendingRequest;
-      clearTimeout(req.timer);
-      pendingRequest = null;
-      diagnosticsRef.current.lastEvent = `streams:${msg.source || 'unknown'}`;
-      setActiveRequest(null);
-
-      if (msg.status === 'OK' && Array.isArray(msg.streams) && msg.streams.length > 0) {
-        req.resolve(msg.streams);
-        return;
-      }
-
-      const details = formatDiagnostics(diagnosticsRef.current);
-      req.reject(
-        new Error(
-          `WebView: ${msg.status || 'unknown'}${msg.reason ? ` - ${msg.reason}` : ''} (audio=${msg.streams?.length ?? 0}, source=${msg.source || 'unknown'}, ${details})`
-        )
-      );
-    } catch {
-      diagnosticsRef.current.lastEvent = 'message-parse-ignored';
-    }
+  const handleProcessGone = useCallback(() => {
+    sendToPage = null;
+    rejectAll('WebView process ended');
+    setInstance((n) => n + 1);
   }, []);
-
-  const handleLoadStart = useCallback((event: any) => {
-    diagnosticsRef.current.loadStarts += 1;
-    diagnosticsRef.current.lastEvent = 'load-start';
-    diagnosticsRef.current.lastUrl = event.nativeEvent.url || diagnosticsRef.current.lastUrl;
-  }, []);
-
-  const handleLoadEnd = useCallback((event: any) => {
-    diagnosticsRef.current.loadEnds += 1;
-    diagnosticsRef.current.lastEvent = 'load-end';
-    diagnosticsRef.current.lastUrl = event.nativeEvent.url || diagnosticsRef.current.lastUrl;
-
-    const current = activeRequestRef.current;
-    if (!current) {
-      return;
-    }
-
-    if (current.phase === 'bootstrap') {
-      setActiveRequest({ videoId: current.videoId, phase: 'embed' });
-      return;
-    }
-
-    webViewRef.current?.injectJavaScript(INTERCEPT_JS);
-    webViewRef.current?.injectJavaScript(TRIGGER_PLAYER_JS);
-  }, []);
-
-  const handleError = useCallback(() => {
-    diagnosticsRef.current.lastEvent = 'webview-error';
-    closeWithError('WebView: page load failed');
-  }, [closeWithError]);
-
-  const handleHttpError = useCallback((event: { nativeEvent: { statusCode: number; url?: string } }) => {
-    diagnosticsRef.current.lastEvent = `http-${event.nativeEvent.statusCode}`;
-    diagnosticsRef.current.lastUrl = event.nativeEvent.url || diagnosticsRef.current.lastUrl;
-    closeWithError(`WebView: HTTP ${event.nativeEvent.statusCode}`);
-  }, [closeWithError]);
-
-  if (!activeRequest) {
-    return null;
-  }
-
-  const source =
-    activeRequest.phase === 'bootstrap'
-      ? { html: BOOTSTRAP_HTML, baseUrl: 'https://www.youtube.com' }
-      : {
-          uri: `https://www.youtube.com/embed/${encodeURIComponent(activeRequest.videoId)}?autoplay=1&mute=1&playsinline=1&enablejsapi=1&controls=0`,
-        };
 
   return (
     <View style={styles.hidden} pointerEvents="none">
       <WebView
-        key={`${activeRequest.videoId}:${activeRequest.phase}`}
+        key={instance}
         ref={webViewRef}
-        source={source}
-        userAgent={EMBED_USER_AGENT}
-        injectedJavaScriptBeforeContentLoaded={INTERCEPT_JS}
+        source={{ html: PAGE_HTML, baseUrl: PAGE_ORIGIN }}
+        injectedJavaScript={WEBVIEW_EXTRACTOR_JS}
+        userAgent={USER_AGENT}
         onMessage={handleMessage}
-        onLoadStart={handleLoadStart}
-        onLoadEnd={handleLoadEnd}
-        onError={handleError}
-        onHttpError={handleHttpError}
+        onContentProcessDidTerminate={handleProcessGone}
+        onRenderProcessGone={handleProcessGone}
         javaScriptEnabled
         domStorageEnabled
-        sharedCookiesEnabled
-        thirdPartyCookiesEnabled
-        mediaPlaybackRequiresUserAction={false}
-        allowsInlineMediaPlayback
+        // Non-matching URLs would be opened in the system browser; never do that from a hidden page
         originWhitelist={['*']}
         style={styles.webview}
       />
@@ -475,13 +240,13 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: 0,
     left: 0,
-    width: 64,
-    height: 64,
+    width: 1,
+    height: 1,
     opacity: 0.01,
     overflow: 'hidden',
   },
   webview: {
-    width: 64,
-    height: 64,
+    width: 1,
+    height: 1,
   },
 });
