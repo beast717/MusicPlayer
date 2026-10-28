@@ -1,0 +1,2 @@
+# patch-package diffs must keep LF endings to apply against node_modules
+*.patch text eol=lf
