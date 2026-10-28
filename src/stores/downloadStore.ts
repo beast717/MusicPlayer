@@ -6,10 +6,12 @@ import {
   downloadTrack as downloadTrackFile,
   deleteDownload as deleteDownloadFile,
   cancelDownload as cancelDownloadFile,
+  getDownloadBlockReason,
   isDownloadCancelledError,
   DownloadProgress,
 } from '../services/downloadManager';
 import { useLibraryStore } from './libraryStore';
+import { useSettingsStore } from './settingsStore';
 
 export type DownloadStatus = 'pending' | 'downloading' | 'completed' | 'failed';
 
@@ -62,6 +64,12 @@ export const useDownloadStore = create<DownloadStore>()((set, get) => ({
     }));
 
     try {
+      const blockReason = await getDownloadBlockReason(
+        useSettingsStore.getState().downloadOverWifiOnly
+      );
+      if (blockReason) throw new Error(blockReason);
+      if (!isCurrentRun()) return;
+
       const result = await downloadTrackFile(track, (progress: DownloadProgress) => {
         if (!isCurrentRun()) return;
         set((state) => {

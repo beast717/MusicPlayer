@@ -1,11 +1,11 @@
 import { SearchResult, AudioStream, ResolvedAudioSource } from '../types';
 import {
   STREAM_URL_TTL,
-  AUDIO_QUALITY_BITRATE,
   REQUEST_TIMEOUT,
   AudioQuality,
 } from '../utils/constants';
 import { mmkvStorage } from './storage';
+import { useSettingsStore } from '../stores/settingsStore';
 import { extractStreamsViaWebView } from './StreamExtractorWebView';
 
 // ─── Helpers ────────────────────────────────────────────────────────
@@ -139,23 +139,36 @@ interface CachedStreamUrl {
   timestamp: number;
 }
 
-const STREAM_SOURCE_CACHE_VERSION = 'v4';
+const STREAM_SOURCE_CACHE_VERSION = 'v5';
 
 type AudioResolveMode = 'direct' | 'playback';
+
+const AUDIO_QUALITIES: AudioQuality[] = ['low', 'medium', 'high'];
 
 interface ResolveAudioOptions {
   allowAdaptiveManifest?: boolean;
   preferHls?: boolean;
   cacheMode: AudioResolveMode;
   testDirectStreams?: boolean;
+  /** Only accept mp4/m4a audio (downloads are saved as .m4a, and iOS can't play webm). */
+  mp4Only?: boolean;
+}
+
+function streamCacheKey(
+  videoId: string,
+  mode: AudioResolveMode,
+  quality: AudioQuality
+): string {
+  return `stream_${STREAM_SOURCE_CACHE_VERSION}_${mode}_${quality}_${videoId}`;
 }
 
 function getCachedAudioSource(
   videoId: string,
-  mode: AudioResolveMode
+  mode: AudioResolveMode,
+  quality: AudioQuality
 ): ResolvedAudioSource | null {
   const cached = mmkvStorage.getObject<CachedStreamUrl>(
-    `stream_${STREAM_SOURCE_CACHE_VERSION}_${mode}_${videoId}`
+    streamCacheKey(videoId, mode, quality)
   );
   if (cached && Date.now() - cached.timestamp < STREAM_URL_TTL) {
     return {
@@ -170,10 +183,11 @@ function getCachedAudioSource(
 function cacheAudioSource(
   videoId: string,
   mode: AudioResolveMode,
+  quality: AudioQuality,
   source: ResolvedAudioSource
 ): void {
   mmkvStorage.setObject<CachedStreamUrl>(
-    `stream_${STREAM_SOURCE_CACHE_VERSION}_${mode}_${videoId}`,
+    streamCacheKey(videoId, mode, quality),
     {
     url: source.url,
     mimeType: source.mimeType,
@@ -574,8 +588,9 @@ async function getStreamFromInvidious(
 export function invalidateStreamCache(videoId: string): void {
   const modes: AudioResolveMode[] = ['direct', 'playback'];
   for (const mode of modes) {
-    const key = `stream_${STREAM_SOURCE_CACHE_VERSION}_${mode}_${videoId}`;
-    mmkvStorage.delete(key);
+    for (const quality of AUDIO_QUALITIES) {
+      mmkvStorage.delete(streamCacheKey(videoId, mode, quality));
+    }
   }
 }
 
@@ -589,12 +604,12 @@ async function resolveAudioSource(
     preferHls = false,
     cacheMode,
     testDirectStreams = false,
+    mp4Only = false,
   } = options;
 
-  const cached = getCachedAudioSource(videoId, cacheMode);
+  const cached = getCachedAudioSource(videoId, cacheMode, quality);
   if (cached) return cached;
 
-  const targetBitrate = AUDIO_QUALITY_BITRATE[quality];
   const errors: string[] = [];
 
   // Helper: attempt a stream source, returning null on failure
@@ -605,7 +620,7 @@ async function resolveAudioSource(
   ): Promise<ResolvedAudioSource | null> => {
     try {
       const streams = await fn();
-      const stream = pickBestAudioStream(streams, targetBitrate, usePreferHls);
+      const stream = pickBestAudioStream(streams, quality, usePreferHls, mp4Only);
 
       if (stream) {
         // If testing direct streams is required, perform a lightweight check to
@@ -626,10 +641,12 @@ async function resolveAudioSource(
         }
 
         const source = toResolvedAudioSource(stream);
-        cacheAudioSource(videoId, cacheMode, source);
+        cacheAudioSource(videoId, cacheMode, quality, source);
         return source;
       }
-      errors.push(`${name}: no suitable audio stream found`);
+      errors.push(
+        `${name}: no suitable ${mp4Only ? 'mp4 ' : ''}audio stream found`
+      );
     } catch (err: any) {
       errors.push(`${name}: ${err.message}`);
     }
@@ -697,13 +714,13 @@ async function resolveAudioSource(
 
   console.warn('All stream methods failed:', errors);
   throw new Error(
-    `Could not get audio stream.\n${errors.join('\n')}`
+    `${mp4Only ? 'No downloadable (M4A) audio stream was found for this song.' : 'Could not get audio stream.'}\n${errors.join('\n')}`
   );
 }
 
 export async function getAudioPlaybackSource(
   videoId: string,
-  quality: AudioQuality = 'high'
+  quality: AudioQuality = useSettingsStore.getState().audioQuality
 ): Promise<ResolvedAudioSource> {
   return resolveAudioSource(videoId, quality, {
     allowAdaptiveManifest: true,
@@ -716,32 +733,49 @@ export async function getAudioPlaybackSource(
 
 export async function getAudioStreamUrl(
   videoId: string,
-  quality: AudioQuality = 'high'
+  quality: AudioQuality = useSettingsStore.getState().audioQuality
 ): Promise<string> {
   const source = await resolveAudioSource(videoId, quality, {
     allowAdaptiveManifest: false,
     preferHls: false,
     cacheMode: 'direct',
     testDirectStreams: true,
+    mp4Only: true,
   });
   return source.url;
 }
 
+const MEDIUM_TARGET_BITRATE = 128000;
+
+/** low = smallest stream, high = best available, medium = closest to ~128 kbps. */
+function pickByQuality(
+  streams: AudioStream[],
+  quality: AudioQuality
+): AudioStream | null {
+  if (streams.length === 0) return null;
+  const byBitrate = [...streams].sort((a, b) => a.bitrate - b.bitrate);
+
+  if (quality === 'low') return byBitrate[0];
+  if (quality === 'high') return byBitrate[byBitrate.length - 1];
+
+  return byBitrate.reduce((best, s) =>
+    Math.abs(s.bitrate - MEDIUM_TARGET_BITRATE) <
+    Math.abs(best.bitrate - MEDIUM_TARGET_BITRATE)
+      ? s
+      : best
+  );
+}
+
 function pickBestAudioStream(
   streams: AudioStream[],
-  targetBitrate: number,
-  preferHls: boolean
+  quality: AudioQuality,
+  preferHls: boolean,
+  mp4Only: boolean = false
 ): AudioStream | null {
   if (streams.length === 0) return null;
 
   const directStreams = streams.filter((stream) => stream.streamType !== 'hls');
   const hlsStream = streams.find((stream) => stream.streamType === 'hls');
-
-  // When preferHls is set, use HLS first — AVPlayer handles it natively
-  // and YouTube's HLS manifests don't require PoToken authentication.
-  if (preferHls && hlsStream) {
-    return hlsStream;
-  }
 
   // Try mp4/aac direct streams (best quality for iOS native playback)
   const mp4Streams = directStreams.filter(
@@ -749,13 +783,18 @@ function pickBestAudioStream(
       s.mimeType.includes('audio/mp4') || s.mimeType.includes('audio/m4a')
   );
 
+  if (mp4Only) {
+    return pickByQuality(mp4Streams, quality);
+  }
+
+  // When preferHls is set, use HLS first — AVPlayer handles it natively
+  // and YouTube's HLS manifests don't require PoToken authentication.
+  if (preferHls && hlsStream) {
+    return hlsStream;
+  }
+
   if (mp4Streams.length > 0) {
-    mp4Streams.sort((a, b) => {
-      const aDiff = Math.abs(a.bitrate - targetBitrate);
-      const bDiff = Math.abs(b.bitrate - targetBitrate);
-      return aDiff - bDiff;
-    });
-    return mp4Streams[0] || null;
+    return pickByQuality(mp4Streams, quality);
   }
 
   // Fall back to HLS even when not preferred
@@ -764,14 +803,7 @@ function pickBestAudioStream(
   }
 
   // Last resort: webm/opus or any remaining format
-  const candidates = directStreams;
-  candidates.sort((a, b) => {
-    const aDiff = Math.abs(a.bitrate - targetBitrate);
-    const bDiff = Math.abs(b.bitrate - targetBitrate);
-    return aDiff - bDiff;
-  });
-
-  return candidates[0] || null;
+  return pickByQuality(directStreams, quality);
 }
 
 // ─── Video Details ──────────────────────────────────────────────────

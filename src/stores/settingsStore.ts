@@ -7,14 +7,12 @@ import { PrimaryHue } from '../theme/colors';
 interface SettingsState {
   audioQuality: AudioQuality;
   downloadOverWifiOnly: boolean;
-  autoPlay: boolean;
   primaryHue: PrimaryHue;
 }
 
 interface SettingsActions {
   setAudioQuality: (quality: AudioQuality) => void;
   setDownloadOverWifiOnly: (value: boolean) => void;
-  setAutoPlay: (value: boolean) => void;
   setPrimaryHue: (hue: PrimaryHue) => void;
 }
 
@@ -25,17 +23,22 @@ export const useSettingsStore = create<SettingsStore>()(
     (set) => ({
       audioQuality: 'high' as AudioQuality,
       downloadOverWifiOnly: true,
-      autoPlay: true,
       primaryHue: 'navy' as PrimaryHue,
 
       setAudioQuality: (quality: AudioQuality) => set({ audioQuality: quality }),
       setDownloadOverWifiOnly: (value: boolean) => set({ downloadOverWifiOnly: value }),
-      setAutoPlay: (value: boolean) => set({ autoPlay: value }),
       setPrimaryHue: (hue: PrimaryHue) => set({ primaryHue: hue }),
     }),
     {
       name: 'settings-store',
       storage: createJSONStorage(() => zustandMMKVStorage),
+      version: 1,
+      migrate: (persistedState, version) => {
+        const state = { ...(persistedState as Record<string, unknown>) };
+        // v1: removed the unused autoPlay setting
+        if (version < 1) delete state.autoPlay;
+        return state as unknown as SettingsState;
+      },
     }
   )
 );

@@ -11,7 +11,8 @@ A free, open-source music streaming app for iOS built with React Native and Expo
 - **Playlists** — Create, rename, and manage custom playlists
 - **Favorites** — Like songs for quick access in your Liked Songs collection
 - **Library** — Browse your playlists, favorites, and downloads all in one place
-- **Audio Quality Settings** — Choose between Low (64 kbps), Medium (128 kbps), or High (256 kbps)
+- **Download Quality** — Choose Low (smallest files), Medium (~128 kbps) or High (best available) for downloaded songs
+- **Wi-Fi-only Downloads** — Optionally block downloads on cellular data
 - **Mini Player** — Persistent mini player at the bottom for quick controls while browsing
 - **Dark Theme** — Clean, dark UI designed for comfortable use
 - **Search History** — Remembers recent searches for quick access

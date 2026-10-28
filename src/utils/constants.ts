@@ -8,8 +8,3 @@ export const REQUEST_TIMEOUT = 12000; // 12s timeout per request
 
 // Audio quality preference enum
 export type AudioQuality = 'low' | 'medium' | 'high';
-export const AUDIO_QUALITY_BITRATE: Record<AudioQuality, number> = {
-  low: 64000,
-  medium: 128000,
-  high: 256000,
-};

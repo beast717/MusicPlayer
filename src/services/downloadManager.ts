@@ -1,4 +1,5 @@
 import * as FileSystem from 'expo-file-system/legacy';
+import NetInfo, { NetInfoStateType } from '@react-native-community/netinfo';
 import { Track } from '../types';
 import { getAudioStreamUrl } from './youtube';
 
@@ -63,6 +64,22 @@ export async function cancelDownload(videoId: string): Promise<void> {
       console.warn('Failed to cancel download:', err);
     }
   }
+}
+
+// ─── Network policy ─────────────────────────────────────────────────
+
+/** Returns a user-facing reason the download can't start now, or null if it can. */
+export async function getDownloadBlockReason(wifiOnly: boolean): Promise<string | null> {
+  const state = await NetInfo.fetch();
+  if (state.isConnected === false || state.type === NetInfoStateType.none) {
+    return 'No internet connection.';
+  }
+  const onWifi =
+    state.type === NetInfoStateType.wifi || state.type === NetInfoStateType.ethernet;
+  if (wifiOnly && !onWifi) {
+    return 'Downloads are set to Wi-Fi only. Connect to Wi-Fi or turn off "Download over Wi-Fi only" in Settings.';
+  }
+  return null;
 }
 
 // ─── Download ───────────────────────────────────────────────────────

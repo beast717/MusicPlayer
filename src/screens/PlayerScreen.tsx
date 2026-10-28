@@ -8,6 +8,7 @@ import {
   Platform,
   ActivityIndicator,
   Image,
+  Alert,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Slider from '@react-native-community/slider';
@@ -74,6 +75,24 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
   const isDownloading = downloadStatus === 'downloading';
 
   const progress = useProgress(500);
+
+  const handleDownloadPress = useCallback(async () => {
+    if (!currentTrack) return;
+    if (isDownloading) {
+      cancelDownload(currentTrack.id);
+      return;
+    }
+    if (isDownloaded) return;
+
+    const track = currentTrack;
+    await startDownload(track);
+    const result = useDownloadStore.getState().activeDownloads[track.id];
+    if (result?.status === 'failed') {
+      // Stream errors carry per-source diagnostics on later lines; show the summary
+      const message = (result.error || 'Something went wrong.').split('\n')[0];
+      Alert.alert('Download Failed', `"${track.title}"\n\n${message}`);
+    }
+  }, [currentTrack, isDownloading, isDownloaded, startDownload, cancelDownload]);
 
   const handleSeek = useCallback(
     (value: number) => {
@@ -241,14 +260,7 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
       {/* Bottom Actions */}
       <View style={styles.bottomActions}>
         <TouchableOpacity
-          onPress={() => {
-            if (!currentTrack) return;
-            if (isDownloading) {
-              cancelDownload(currentTrack.id);
-            } else if (!isDownloaded) {
-              startDownload(currentTrack);
-            }
-          }}
+          onPress={handleDownloadPress}
           style={styles.bottomAction}
           accessibilityRole="button"
           accessibilityLabel={

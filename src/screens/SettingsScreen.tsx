@@ -34,8 +34,6 @@ export function SettingsScreen() {
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
   const downloadOverWifiOnly = useSettingsStore((s) => s.downloadOverWifiOnly);
   const setDownloadOverWifiOnly = useSettingsStore((s) => s.setDownloadOverWifiOnly);
-  const autoPlay = useSettingsStore((s) => s.autoPlay);
-  const setAutoPlay = useSettingsStore((s) => s.setAutoPlay);
   const primaryHue = useSettingsStore((s) => s.primaryHue);
   const setPrimaryHue = useSettingsStore((s) => s.setPrimaryHue);
   const downloadedTracks = useLibraryStore((s) => s.downloadedTracks);
@@ -49,14 +47,14 @@ export function SettingsScreen() {
 
   const handleAudioQuality = () => {
     const options: { label: string; value: AudioQuality }[] = [
-      { label: 'Low (64 kbps) — saves data', value: 'low' },
-      { label: 'Medium (128 kbps)', value: 'medium' },
-      { label: 'High (256 kbps) — best quality', value: 'high' },
+      { label: 'Low — smallest files', value: 'low' },
+      { label: 'Medium (~128 kbps)', value: 'medium' },
+      { label: 'High — best available', value: 'high' },
     ];
 
     Alert.alert(
-      'Audio Quality',
-      'Choose streaming quality',
+      'Download Quality',
+      'Used for downloaded songs. Streaming adjusts quality automatically to your connection.',
       [
         ...options.map((opt) => ({
           text: `${opt.label}${audioQuality === opt.value ? ' ✓' : ''}`,
@@ -167,7 +165,7 @@ export function SettingsScreen() {
           >
             <Volume2 size={20} color={theme.primary} />
             <Text style={[typography.body, { color: theme.text, flex: 1 }]}>
-              Streaming Quality
+              Download Quality
             </Text>
             <Text style={[typography.body, { color: theme.textSecondary }]}>
               {qualityLabel[audioQuality]}
