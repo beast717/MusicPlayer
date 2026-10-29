@@ -141,14 +141,28 @@ describe('stream resolution', () => {
     expect(mockKv[keys[0]].url).toBe(webViewStream.url);
   });
 
-  it('resets the WebView session and falls back when YouTube blocks its stream', async () => {
+  it('retries with a fresh session when YouTube rejects the token', async () => {
+    const freshStream = { ...webViewStream, url: 'https://gvs/fresh-session' };
+    mockExtractStreams.mockResolvedValueOnce([webViewStream]).mockResolvedValueOnce([freshStream]);
+    probeStatus[webViewStream.url] = 403;
+    probeStatus[freshStream.url] = 206;
+
+    const source = await getAudioPlaybackSource('vid1');
+
+    expect(source.url).toBe(freshStream.url);
+    expect(mockExtractStreams).toHaveBeenCalledTimes(2);
+    expect(mockResetSession).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back after a fresh session is rejected too', async () => {
     mockExtractStreams.mockResolvedValue([webViewStream]);
     probeStatus[webViewStream.url] = 403;
 
     const source = await getAudioPlaybackSource('vid1');
 
-    expect(mockExtractStreams.mock.calls.map((call) => call[1])).toEqual(['TV_SIMPLY', 'MWEB']);
-    expect(mockResetSession).toHaveBeenCalledTimes(1);
+    expect(mockExtractStreams.mock.calls.map((call) => call[1])).toEqual(['TV_SIMPLY', 'TV_SIMPLY']);
+    // Each rejected session is dropped, so the next song starts with a fresh one
+    expect(mockResetSession).toHaveBeenCalledTimes(2);
     expect(source.url).toBe('https://hls/innertube');
   });
 
@@ -157,6 +171,7 @@ describe('stream resolution', () => {
 
     await getAudioPlaybackSource('vid1');
 
+    expect(mockExtractStreams).toHaveBeenCalledTimes(1);
     expect(mockResetSession).not.toHaveBeenCalled();
   });
 

@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Platform, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
 import WebView, { WebViewMessageEvent } from 'react-native-webview';
 import { WEBVIEW_EXTRACTOR_JS } from './generated/webviewExtractor';
 
@@ -43,11 +43,6 @@ const EXTRACT_TIMEOUT = 30000;
 // Gives the page the youtube.com origin, so its requests to YouTube are same-origin
 const PAGE_ORIGIN = 'https://www.youtube.com/';
 const PAGE_HTML = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body></body></html>';
-
-const USER_AGENT =
-  Platform.OS === 'ios'
-    ? 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1'
-    : 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Mobile Safari/537.36';
 
 // Hosts the page may ask the app to fetch on its behalf
 const BRIDGE_FETCH_HOSTS = ['youtube.com', 'googlevideo.com', 'google.com', 'googleapis.com'];
@@ -221,7 +216,9 @@ export function StreamExtractorWebView() {
         ref={webViewRef}
         source={{ html: PAGE_HTML, baseUrl: PAGE_ORIGIN }}
         injectedJavaScript={WEBVIEW_EXTRACTOR_JS}
-        userAgent={USER_AGENT}
+        // No userAgent override: BotGuard checks the page, and a hardcoded
+        // browser/OS version that doesn't match the real WebView can get
+        // the session's token rejected
         onMessage={handleMessage}
         onContentProcessDidTerminate={handleProcessGone}
         onRenderProcessGone={handleProcessGone}

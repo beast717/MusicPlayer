@@ -151,8 +151,14 @@ type AudioResolveMode = 'direct' | 'playback';
 
 const AUDIO_QUALITIES: AudioQuality[] = ['low', 'medium', 'high'];
 
-/** InnerTube clients the WebView tries, in order. TV_SIMPLY accepts the web PoToken. */
-const WEBVIEW_CLIENTS = ['TV_SIMPLY', 'MWEB'];
+/** InnerTube client the WebView uses. TV_SIMPLY streams accept the web PoToken. */
+const WEBVIEW_CLIENT = 'TV_SIMPLY';
+
+/**
+ * YouTube now and then rejects a whole session's token; a fresh session
+ * usually fixes it, so try once more right away instead of failing the song.
+ */
+const WEBVIEW_ATTEMPTS = 2;
 
 interface ResolveAudioOptions {
   allowAdaptiveManifest?: boolean;
@@ -486,19 +492,21 @@ async function resolveAudioSource(
   };
 
   // 1. WebView: PoToken-authorized streams, needed for protected songs
-  for (const client of WEBVIEW_CLIENTS) {
-    const source = await trySource(`WebView ${client}`, async () =>
-      (await extractStreamsViaWebView(videoId, client)).map((stream) => ({
+  for (let attempt = 1; attempt <= WEBVIEW_ATTEMPTS; attempt++) {
+    webViewStreamRejected = false;
+    const source = await trySource(`WebView (attempt ${attempt})`, async () =>
+      (await extractStreamsViaWebView(videoId, WEBVIEW_CLIENT)).map((stream) => ({
         ...stream,
         codec: '',
         streamType: 'default' as const,
       }))
     );
     if (source) return source;
-  }
 
-  // YouTube stopped accepting the current token; mint a fresh one next time
-  if (webViewStreamRejected) resetWebViewSession();
+    // Other failures (video unavailable, timeout) won't change with a new token
+    if (!webViewStreamRejected) break;
+    resetWebViewSession();
+  }
 
   // 2. InnerTube app clients: only unprotected videos play in full
   const innerTubeSource = await trySource(

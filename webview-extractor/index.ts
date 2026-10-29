@@ -161,11 +161,13 @@ Platform.shim.eval = async (data: Types.BuildScriptResult, env: Record<string, T
 };
 Log.setLevel(Log.Level.WARNING, Log.Level.ERROR);
 
-function loadScript(src: string, id: string): Promise<void> {
-  if (id && document.getElementById(id)) return Promise.resolve();
+/** Loads the BotGuard interpreter unless its VM global is already there. */
+function loadBotGuard(src: string, globalName: string): Promise<void> {
+  // Check the global itself: a script tag from an earlier session doesn't
+  // guarantee the VM is still defined
+  if (Reflect.get(window, globalName)) return Promise.resolve();
   return new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    if (id) script.id = id;
     script.src = src;
     script.onload = () => resolve();
     script.onerror = () => reject(new Error(`Could not load BotGuard from ${src}`));
@@ -180,9 +182,9 @@ async function createMinter(yt: Innertube): Promise<{ minter: WebPoMinter; ttlSe
   const interpreterUrl =
     challenge.interpreter_url.private_do_not_access_or_else_trusted_resource_url_wrapped_value;
   if (!interpreterUrl) throw new Error('BotGuard challenge has no interpreter URL');
-  await loadScript(
+  await loadBotGuard(
     interpreterUrl.startsWith('//') ? `https:${interpreterUrl}` : interpreterUrl,
-    challenge.interpreter_hash
+    challenge.global_name
   );
 
   const botguard = await BotGuardClient.create({
