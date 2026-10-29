@@ -76,7 +76,7 @@ export async function PlaybackService() {
         invalidateStreamCache(activeTrackId);
         resetWebViewSession();
 
-        const freshSource = buildTrackPlayerSource(
+        const freshSource = await buildTrackPlayerSource(
           await getAudioPlaybackSource(activeTrackId)
         );
         const currentTrack = store.currentTrack;

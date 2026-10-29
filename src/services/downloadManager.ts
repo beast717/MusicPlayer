@@ -1,7 +1,8 @@
 import * as FileSystem from 'expo-file-system/legacy';
 import NetInfo, { NetInfoStateType } from '@react-native-community/netinfo';
 import { Track } from '../types';
-import { getAudioStreamUrl } from './youtube';
+import { getAudioDownloadSource } from './youtube';
+import { getProxiedStreamUrl } from './streamProxy';
 
 const DOWNLOADS_DIR = `${FileSystem.documentDirectory}downloads/`;
 const THUMBNAILS_DIR = `${FileSystem.documentDirectory}thumbnails/`;
@@ -96,8 +97,10 @@ export async function downloadTrack(
   try {
     await ensureDirectories();
 
-    // Get stream URL
-    const streamUrl = await getAudioStreamUrl(track.id);
+    // Get stream URL. On iOS this goes through the local proxy, which fetches
+    // in pieces; YouTube throttles single requests over ~10 MB.
+    const source = await getAudioDownloadSource(track.id);
+    const streamUrl = await getProxiedStreamUrl(source);
     throwIfCancelled(handle);
 
     // Download audio. YouTube's CDN stalls requests without a Range header.

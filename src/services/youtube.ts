@@ -142,10 +142,11 @@ interface CachedStreamUrl {
   url: string;
   mimeType: string;
   streamType: 'default' | 'hls';
+  contentLength?: number;
   timestamp: number;
 }
 
-const STREAM_SOURCE_CACHE_VERSION = 'v6';
+const STREAM_SOURCE_CACHE_VERSION = 'v7';
 
 type AudioResolveMode = 'direct' | 'playback';
 
@@ -189,6 +190,7 @@ function getCachedAudioSource(
       url: cached.url,
       mimeType: cached.mimeType,
       streamType: cached.streamType,
+      contentLength: cached.contentLength,
     };
   }
   return null;
@@ -206,6 +208,7 @@ function cacheAudioSource(
     url: source.url,
     mimeType: source.mimeType,
     streamType: source.streamType,
+    contentLength: source.contentLength,
     timestamp: Date.now(),
     }
   );
@@ -377,6 +380,7 @@ function toResolvedAudioSource(stream: AudioStream): ResolvedAudioSource {
     url: stream.url,
     mimeType: stream.mimeType,
     streamType: stream.streamType,
+    contentLength: stream.contentLength,
   };
 }
 
@@ -541,17 +545,16 @@ export async function getAudioPlaybackSource(
   });
 }
 
-export async function getAudioStreamUrl(
+export async function getAudioDownloadSource(
   videoId: string,
   quality: AudioQuality = useSettingsStore.getState().audioQuality
-): Promise<string> {
-  const source = await resolveAudioSource(videoId, quality, {
+): Promise<ResolvedAudioSource> {
+  return resolveAudioSource(videoId, quality, {
     allowAdaptiveManifest: false,
     preferHls: false,
     cacheMode: 'direct',
     mp4Only: true,
   });
-  return source.url;
 }
 
 const MEDIUM_TARGET_BITRATE = 128000;

@@ -4,6 +4,7 @@ import { ResolvedAudioSource, Track } from '../types';
 import { useLibraryStore } from '../stores/libraryStore';
 import { getLocalFilePath } from './downloadManager';
 import { getAudioPlaybackSource } from './youtube';
+import { getProxiedStreamUrl } from './streamProxy';
 
 export const IOS_REMOTE_USER_AGENT =
   'Mozilla/5.0 (iPhone; CPU iPhone OS 18_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.3 Mobile/15E148 Safari/604.1';
@@ -27,13 +28,15 @@ export function getUrlHost(url: string): string {
   }
 }
 
-export function buildTrackPlayerSource(
+export async function buildTrackPlayerSource(
   source: ResolvedAudioSource
-): PlayerTrackSource {
+): Promise<PlayerTrackSource> {
+  const url = await getProxiedStreamUrl(source);
+  const via = url === source.url ? '' : ' via=local-proxy';
   const baseSource: PlayerTrackSource = {
-    url: source.url,
+    url,
     contentType: source.mimeType,
-    streamDebug: `streamType=${source.streamType} mimeType=${source.mimeType} host=${getUrlHost(source.url)}`,
+    streamDebug: `streamType=${source.streamType} mimeType=${source.mimeType} host=${getUrlHost(source.url)}${via}`,
   };
 
   if (Platform.OS === 'ios') {
@@ -75,7 +78,7 @@ export function getLocalTrackSource(track: Track): PlayerTrackSource | null {
 export async function resolveTrackSource(track: Track): Promise<PlayerTrackSource> {
   return (
     getLocalTrackSource(track) ??
-    buildTrackPlayerSource(await getAudioPlaybackSource(track.id))
+    (await buildTrackPlayerSource(await getAudioPlaybackSource(track.id)))
   );
 }
 

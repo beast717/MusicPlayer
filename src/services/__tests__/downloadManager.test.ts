@@ -17,7 +17,8 @@ jest.mock('@react-native-community/netinfo', () => ({
   },
 }));
 
-jest.mock('../youtube', () => ({ getAudioStreamUrl: jest.fn() }));
+jest.mock('../youtube', () => ({ getAudioDownloadSource: jest.fn() }));
+jest.mock('../streamProxy', () => ({ getProxiedStreamUrl: jest.fn() }));
 
 import { getDownloadBlockReason, withCurrentLocalPaths } from '../downloadManager';
 

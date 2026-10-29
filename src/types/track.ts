@@ -35,4 +35,6 @@ export interface ResolvedAudioSource {
   url: string;
   mimeType: string;
   streamType: 'default' | 'hls';
+  /** Size in bytes, when known. Needed to stream through the local proxy. */
+  contentLength?: number;
 }

@@ -19,7 +19,10 @@
           "audio"
         ],
         "NSAppleMusicUsageDescription": "MusicPlayer uses audio playback features.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSAppTransportSecurity": {
+          "NSAllowsLocalNetworking": true
+        }
       }
     },
     "android": {

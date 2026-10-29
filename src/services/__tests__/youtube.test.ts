@@ -30,7 +30,7 @@ jest.mock('../../stores/settingsStore', () => ({
 import {
   pickBestAudioStream,
   getAudioPlaybackSource,
-  getAudioStreamUrl,
+  getAudioDownloadSource,
   invalidateStreamCache,
   pruneStreamCache,
 } from '../youtube';
@@ -202,7 +202,7 @@ describe('stream resolution', () => {
     mockExtractStreams.mockResolvedValue([webm, webViewStream]);
     probeStatus[webViewStream.url] = 206;
 
-    expect(await getAudioStreamUrl('vid1')).toBe(webViewStream.url);
+    expect((await getAudioDownloadSource('vid1')).url).toBe(webViewStream.url);
   });
 
   it('invalidateStreamCache clears every mode and quality', async () => {
@@ -210,7 +210,7 @@ describe('stream resolution', () => {
     probeStatus[webViewStream.url] = 206;
     await getAudioPlaybackSource('vid1', 'low');
     await getAudioPlaybackSource('vid1', 'high');
-    await getAudioStreamUrl('vid1', 'high');
+    await getAudioDownloadSource('vid1', 'high');
 
     invalidateStreamCache('vid1');
 
@@ -221,13 +221,13 @@ describe('stream resolution', () => {
 describe('pruneStreamCache', () => {
   it('removes expired, old-version and broken entries and keeps the rest', () => {
     const now = Date.now();
-    mockKv['stream_v5_playback_high_abc'] = { url: 'x', timestamp: now };
-    mockKv['stream_v6_playback_high_expired'] = { url: 'x', timestamp: now - 46 * 60 * 1000 };
-    mockKv['stream_v6_direct_low_broken'] = undefined;
-    mockKv['stream_v6_playback_high_fresh'] = { url: 'x', timestamp: now };
+    mockKv['stream_v6_playback_high_abc'] = { url: 'x', timestamp: now };
+    mockKv['stream_v7_playback_high_expired'] = { url: 'x', timestamp: now - 46 * 60 * 1000 };
+    mockKv['stream_v7_direct_low_broken'] = undefined;
+    mockKv['stream_v7_playback_high_fresh'] = { url: 'x', timestamp: now };
     mockKv['library-store'] = '{}';
 
     expect(pruneStreamCache()).toBe(3);
-    expect(Object.keys(mockKv).sort()).toEqual(['library-store', 'stream_v6_playback_high_fresh']);
+    expect(Object.keys(mockKv).sort()).toEqual(['library-store', 'stream_v7_playback_high_fresh']);
   });
 });

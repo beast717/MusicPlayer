@@ -89,6 +89,8 @@ The app mounts a hidden WebView whose page has the `youtube.com` origin (`src/se
 
 `src/services/youtube.ts` checks each stream by fetching its last byte before using it, and falls back to InnerTube's app clients for unprotected videos.
 
+YouTube also throttles any single request over ~10 MB to a crawl, and the iOS player asks for whole files, so long tracks (live sets, full albums) would never load. On iOS, playback and downloads therefore go through a small HTTP server inside the app (`modules/stream-proxy`, Swift). It listens on `127.0.0.1` only and answers the player's requests by fetching from YouTube in pieces that grow from 256 KB to 8 MB.
+
 `npm install` bundles the WebView code automatically (`scripts/build-webview-extractor.mjs`). Run `npm run build:extractor` to rebuild it by hand.
 
 **When songs start failing again**, YouTube has usually changed something and the libraries will already have caught up:
