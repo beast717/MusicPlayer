@@ -141,6 +141,38 @@ describe('stream resolution', () => {
     expect(mockKv[keys[0]].url).toBe(webViewStream.url);
   });
 
+  it('shares one resolution between simultaneous requests for a song', async () => {
+    mockExtractStreams.mockResolvedValue([webViewStream]);
+    probeStatus[webViewStream.url] = 206;
+
+    const [a, b] = await Promise.all([getAudioPlaybackSource('vid1'), getAudioPlaybackSource('vid1')]);
+
+    expect(a.url).toBe(webViewStream.url);
+    expect(b.url).toBe(webViewStream.url);
+    expect(mockExtractStreams).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps a stream cached until its own expiry, past the default lifetime', async () => {
+    const expiresIn = (hours: number) => Math.floor(Date.now() / 1000) + hours * 3600;
+    const longLived = { ...webViewStream, url: `https://gvs/long?expire=${expiresIn(6)}&x=1` };
+    mockExtractStreams.mockResolvedValue([longLived]);
+    probeStatus[longLived.url] = 206;
+    await getAudioPlaybackSource('vid1');
+
+    const realNow = Date.now;
+    Date.now = () => realNow() + 2 * 60 * 60 * 1000; // two hours later
+    try {
+      expect((await getAudioPlaybackSource('vid1')).url).toBe(longLived.url);
+      expect(mockExtractStreams).toHaveBeenCalledTimes(1);
+
+      Date.now = () => realNow() + 5.75 * 60 * 60 * 1000; // inside the 30 min safety margin
+      await getAudioPlaybackSource('vid1');
+      expect(mockExtractStreams).toHaveBeenCalledTimes(2);
+    } finally {
+      Date.now = realNow;
+    }
+  });
+
   it('retries with a fresh session when YouTube rejects the token', async () => {
     const freshStream = { ...webViewStream, url: 'https://gvs/fresh-session' };
     mockExtractStreams.mockResolvedValueOnce([webViewStream]).mockResolvedValueOnce([freshStream]);

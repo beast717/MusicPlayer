@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import {
   View,
   Text,
@@ -33,7 +33,7 @@ import { spacing, borderRadius } from '../theme/spacing';
 import { usePlayerStore, useLibraryStore, useDownloadStore } from '../stores';
 import { useProgress } from 'react-native-track-player';
 
-import { formatDuration, useDebouncedCallback } from '../utils/helpers';
+import { formatDuration, getDisplayDuration, useDebouncedCallback } from '../utils/helpers';
 
 interface PlayerScreenProps {
   onDismiss: () => void;
@@ -73,8 +73,30 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
     currentTrack ? s.getDownloadStatus(currentTrack.id) : null
   );
   const isDownloading = downloadStatus === 'downloading';
+  const downloadProgress = useDownloadStore((s) =>
+    currentTrack ? s.getDownloadProgress(currentTrack.id) : 0
+  );
 
   const progress = useProgress(500);
+  const duration = getDisplayDuration(currentTrack?.duration, progress.duration);
+  const playbackPosition =
+    duration > 0 ? Math.min(progress.position, duration) : progress.position;
+
+  // While dragging, the times follow the thumb; after release they hold the
+  // chosen time until playback gets there, so they don't flick back
+  const [scrubPosition, setScrubPosition] = useState<number | null>(null);
+  const [scrubStart, setScrubStart] = useState<number | null>(null);
+  const position = scrubPosition ?? playbackPosition;
+
+  useEffect(() => {
+    if (scrubPosition === null || scrubStart !== null) return;
+    if (Math.abs(progress.position - scrubPosition) < 1.5) setScrubPosition(null);
+  }, [progress.position, scrubPosition, scrubStart]);
+
+  useEffect(() => {
+    setScrubPosition(null);
+    setScrubStart(null);
+  }, [currentTrack?.id]);
 
   const handleDownloadPress = useCallback(async () => {
     if (!currentTrack) return;
@@ -94,9 +116,25 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
     }
   }, [currentTrack, isDownloading, isDownloaded, startDownload, cancelDownload]);
 
+  const handleSlidingStart = useCallback((value: number) => {
+    setScrubStart(value);
+    setScrubPosition(value);
+  }, []);
+
+  const handleScrub = useCallback(
+    (value: number) => {
+      if (scrubStart !== null) setScrubPosition(value);
+    },
+    [scrubStart]
+  );
+
   const handleSeek = useCallback(
     (value: number) => {
+      setScrubStart(null);
+      setScrubPosition(value);
       seekTo(value);
+      // Stop holding the chosen time if playback never reports reaching it
+      setTimeout(() => setScrubPosition((current) => (current === value ? null : current)), 3000);
     },
     [seekTo]
   );
@@ -201,9 +239,11 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
       <View style={styles.progressContainer}>
         <Slider
           style={styles.slider}
-          value={progress.position}
+          value={position}
           minimumValue={0}
-          maximumValue={progress.duration || 1}
+          maximumValue={duration || 1}
+          onSlidingStart={handleSlidingStart}
+          onValueChange={handleScrub}
           onSlidingComplete={handleSeek}
           minimumTrackTintColor={theme.primary}
           maximumTrackTintColor={theme.border}
@@ -211,10 +251,16 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
         />
         <View style={styles.timeRow}>
           <Text style={[typography.caption2, { color: theme.textSecondary }]}>
-            {formatDuration(progress.position)}
+            {formatDuration(position)}
+          </Text>
+          {/* How far the drag has moved from where it started */}
+          <Text style={[typography.caption2, styles.scrubDelta, { color: theme.primary }]}>
+            {scrubStart !== null && scrubPosition !== null
+              ? `${scrubPosition >= scrubStart ? '+' : '−'}${formatDuration(Math.abs(scrubPosition - scrubStart))}`
+              : ''}
           </Text>
           <Text style={[typography.caption2, { color: theme.textSecondary }]}>
-            -{formatDuration(Math.max(0, (progress.duration || 0) - progress.position))}
+            -{formatDuration(Math.max(0, duration - position))}
           </Text>
         </View>
       </View>
@@ -267,7 +313,12 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
             isDownloading ? 'Cancel download' : isDownloaded ? 'Downloaded' : 'Download'
           }
         >
-          {isDownloading ? (
+          {isDownloading && downloadProgress > 0 ? (
+            // Percentage once bytes arrive, so a slow download is visible as slow
+            <Text style={[styles.downloadPercent, { color: theme.primary }]}>
+              {Math.round(downloadProgress * 100)}%
+            </Text>
+          ) : isDownloading ? (
             <View style={styles.downloadProgress}>
               <ActivityIndicator size="small" color={theme.primary} />
               <View style={styles.downloadCancelIcon}>
@@ -352,6 +403,14 @@ const styles = StyleSheet.create({
     marginTop: -spacing.sm,
     paddingHorizontal: spacing.xs,
   },
+  scrubDelta: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    textAlign: 'center',
+    fontWeight: '600',
+    fontVariant: ['tabular-nums'],
+  },
   controls: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -395,5 +454,12 @@ const styles = StyleSheet.create({
     ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
     alignItems: 'center',
+  },
+  downloadPercent: {
+    fontSize: 12,
+    fontWeight: '600',
+    minWidth: 34,
+    textAlign: 'center',
+    fontVariant: ['tabular-nums'],
   },
 });

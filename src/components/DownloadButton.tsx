@@ -1,7 +1,6 @@
 import React from 'react';
 import {
   View,
-  Text,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
@@ -48,16 +47,9 @@ export function DownloadButton({ track, size = 20 }: DownloadButtonProps) {
   }
 
   if (status === 'downloading') {
-    // Spinner while the stream is resolved, then the percentage once bytes arrive
     return (
       <View style={styles.container}>
-        {downloadProgress > 0 ? (
-          <Text style={[styles.progress, { color: theme.primary }]}>
-            {Math.round(downloadProgress * 100)}%
-          </Text>
-        ) : (
-          <ActivityIndicator size="small" color={theme.primary} />
-        )}
+        <ActivityIndicator size="small" color={theme.primary} />
       </View>
     );
   }
@@ -81,12 +73,5 @@ const styles = StyleSheet.create({
     padding: spacing.xs,
     justifyContent: 'center',
     alignItems: 'center',
-  },
-  progress: {
-    fontSize: 11,
-    fontWeight: '600',
-    minWidth: 30,
-    textAlign: 'center',
-    fontVariant: ['tabular-nums'],
   },
 });

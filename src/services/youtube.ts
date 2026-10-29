@@ -144,9 +144,29 @@ interface CachedStreamUrl {
   streamType: 'default' | 'hls';
   contentLength?: number;
   timestamp: number;
+  /** When to stop using the URL, from its own expiry. Older entries fall back to STREAM_URL_TTL. */
+  expiresAt?: number;
 }
 
 const STREAM_SOURCE_CACHE_VERSION = 'v7';
+
+// Stop using a URL this long before YouTube says it expires
+const STREAM_EXPIRY_MARGIN = 30 * 60 * 1000;
+
+/**
+ * YouTube stream URLs carry their expiry (Unix seconds) as `expire=` or, in
+ * HLS manifests, `/expire/`. Typically ~6 hours, long enough to resolve
+ * upcoming tracks well ahead of time.
+ */
+function streamExpiresAt(url: string, now: number): number {
+  const expire = Number(/[?&/]expire[=/](\d+)/.exec(url)?.[1]);
+  return expire > 0 ? expire * 1000 - STREAM_EXPIRY_MARGIN : now + STREAM_URL_TTL;
+}
+
+function isCacheEntryFresh(cached: CachedStreamUrl, now: number): boolean {
+  if (cached.expiresAt) return now < cached.expiresAt;
+  return !!cached.timestamp && now - cached.timestamp < STREAM_URL_TTL;
+}
 
 type AudioResolveMode = 'direct' | 'playback';
 
@@ -185,7 +205,7 @@ function getCachedAudioSource(
   const cached = mmkvStorage.getObject<CachedStreamUrl>(
     streamCacheKey(videoId, mode, quality)
   );
-  if (cached && Date.now() - cached.timestamp < STREAM_URL_TTL) {
+  if (cached && isCacheEntryFresh(cached, Date.now())) {
     return {
       url: cached.url,
       mimeType: cached.mimeType,
@@ -202,6 +222,7 @@ function cacheAudioSource(
   quality: AudioQuality,
   source: ResolvedAudioSource
 ): void {
+  const now = Date.now();
   mmkvStorage.setObject<CachedStreamUrl>(
     streamCacheKey(videoId, mode, quality),
     {
@@ -209,7 +230,8 @@ function cacheAudioSource(
     mimeType: source.mimeType,
     streamType: source.streamType,
     contentLength: source.contentLength,
-    timestamp: Date.now(),
+    timestamp: now,
+    expiresAt: streamExpiresAt(source.url, now),
     }
   );
 }
@@ -439,7 +461,7 @@ export function pruneStreamCache(): number {
     const cached = key.startsWith(currentPrefix)
       ? mmkvStorage.getObject<CachedStreamUrl>(key)
       : undefined;
-    if (!cached || !cached.timestamp || now - cached.timestamp >= STREAM_URL_TTL) {
+    if (!cached || !isCacheEntryFresh(cached, now)) {
       mmkvStorage.delete(key);
       removed++;
     }
@@ -448,7 +470,26 @@ export function pruneStreamCache(): number {
   return removed;
 }
 
-async function resolveAudioSource(
+// Resolutions in progress, so a prefetch and a tap on the same song share one
+const pendingResolutions = new Map<string, Promise<ResolvedAudioSource>>();
+
+function resolveAudioSource(
+  videoId: string,
+  quality: AudioQuality,
+  options: ResolveAudioOptions
+): Promise<ResolvedAudioSource> {
+  const key = streamCacheKey(videoId, options.cacheMode, quality);
+  const pending = pendingResolutions.get(key);
+  if (pending) return pending;
+
+  const resolution = resolveAudioSourceUncoalesced(videoId, quality, options).finally(() => {
+    pendingResolutions.delete(key);
+  });
+  pendingResolutions.set(key, resolution);
+  return resolution;
+}
+
+async function resolveAudioSourceUncoalesced(
   videoId: string,
   quality: AudioQuality,
   options: ResolveAudioOptions

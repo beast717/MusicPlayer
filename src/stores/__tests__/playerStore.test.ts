@@ -1,5 +1,7 @@
 import { Track } from '../../types';
 
+const mockPrefetch = jest.fn();
+
 // In-memory TrackPlayer with the queue semantics the store relies on
 const mockTp = {
   queue: [] as any[],
@@ -63,9 +65,10 @@ jest.mock('../../services/trackPlayerHelpers', () => ({
   getLocalTrackSource: () => null,
   resolveTrackSource: async (t: { id: string }) => ({ url: `https://stream/${t.id}` }),
   toTrackPlayerTrack: (t: { id: string }, s: object) => ({ id: t.id, ...s }),
+  prefetchStreams: (...args: unknown[]) => mockPrefetch(...args),
 }));
 
-import { usePlayerStore } from '../playerStore';
+import { usePlayerStore, getUpcomingTracks } from '../playerStore';
 
 const PLACEHOLDER_URL = 'https://placeholder.invalid';
 const RepeatMode = { Off: 0, Track: 1, Queue: 2 };
@@ -185,5 +188,30 @@ describe('repeat mode', () => {
     expect([state().repeatMode, mockTp.repeat]).toEqual(['track', RepeatMode.Track]);
     await state().cycleRepeatMode();
     expect([state().repeatMode, mockTp.repeat]).toEqual(['off', RepeatMode.Off]);
+  });
+});
+
+describe('upcoming tracks', () => {
+  it('prefetches the next track when a queue starts', async () => {
+    mockPrefetch.mockClear();
+    await state().playQueue(tracks, 3);
+    await new Promise((r) => setTimeout(r, 0));
+
+    expect(mockPrefetch).toHaveBeenCalledWith([tracks[4]]);
+  });
+
+  it('stops at the end of the queue unless the whole queue repeats', async () => {
+    await state().playQueue(tracks, 8);
+
+    expect((await getUpcomingTracks(3)).map((t) => t.id)).toEqual(['t9']);
+
+    usePlayerStore.setState({ repeatMode: 'queue' });
+    expect((await getUpcomingTracks(3)).map((t) => t.id)).toEqual(['t9', 't0', 't1']);
+  });
+
+  it('has nothing upcoming for a single track', async () => {
+    await state().playTrack(tracks[0]);
+
+    expect(await getUpcomingTracks(5)).toEqual([]);
   });
 });

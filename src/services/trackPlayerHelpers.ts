@@ -74,6 +74,26 @@ export function getLocalTrackSource(track: Track): PlayerTrackSource | null {
   return isDownloaded ? { url: getLocalFilePath(track.id) } : null;
 }
 
+let prefetchQueue: Promise<void> = Promise.resolve();
+
+/**
+ * Resolve upcoming tracks' streams ahead of time so they start from the cache.
+ * Streams are resolved in a WebView, which iOS may pause while the app is in
+ * the background; waiting until a track starts could then stall the queue.
+ */
+export function prefetchStreams(tracks: Track[]): void {
+  for (const track of tracks) {
+    if (getLocalTrackSource(track)) continue;
+    // One at a time, after any earlier prefetches
+    prefetchQueue = prefetchQueue.then(() =>
+      getAudioPlaybackSource(track.id).then(
+        () => undefined,
+        (err) => console.warn(`Prefetch failed for ${track.id}:`, err?.message ?? err)
+      )
+    );
+  }
+}
+
 /** Local file if downloaded, otherwise a freshly resolved stream. */
 export async function resolveTrackSource(track: Track): Promise<PlayerTrackSource> {
   return (

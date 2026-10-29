@@ -6,6 +6,7 @@ import { zustandMMKVStorage } from '../services/storage';
 import { withCurrentLocalPaths } from '../services/downloadManager';
 import {
   getLocalTrackSource,
+  prefetchStreams,
   resolveTrackSource,
   toTrackPlayerTrack,
   PLACEHOLDER_URL,
@@ -47,6 +48,21 @@ export function getSwitchingTrackId(): string | null {
 
 export function isReorderingQueue(): boolean {
   return _isReorderingQueue;
+}
+
+/** The next `count` tracks after the playing one, in play order (wrapping when repeating the queue). */
+export async function getUpcomingTracks(count: number): Promise<Track[]> {
+  const { queue, repeatMode } = usePlayerStore.getState();
+  const activeIndex = await TrackPlayer.getActiveTrackIndex();
+  if (activeIndex == null || queue.length < 2) return [];
+
+  const upcoming: Track[] = [];
+  for (let step = 1; step <= count && step < queue.length; step++) {
+    const index = activeIndex + step;
+    if (index >= queue.length && repeatMode !== 'queue') break;
+    upcoming.push(queue[index % queue.length]);
+  }
+  return upcoming;
 }
 
 
@@ -233,6 +249,8 @@ export const usePlayerStore = create<PlayerStore>()(
             isLoading: false,
             recentlyPlayed: recent.slice(0, MAX_RECENT_TRACKS),
           });
+
+          getUpcomingTracks(1).then(prefetchStreams, () => {});
         } catch (err: unknown) {
           if (myNonce === _switchNonce) {
             set({

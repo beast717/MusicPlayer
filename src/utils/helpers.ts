@@ -27,6 +27,18 @@ export function formatDuration(seconds: number): string {
   return `${mins}:${paddedSecs}`;
 }
 
+/**
+ * Length to show for the playing track. iOS reports twice the real length for
+ * YouTube's fragmented MP4 audio (its header already claims the full duration
+ * and the fragments are counted on top), so YouTube's own length wins when known.
+ */
+export function getDisplayDuration(
+  trackDuration: number | undefined,
+  playerDuration: number
+): number {
+  return trackDuration && trackDuration > 0 ? trackDuration : playerDuration;
+}
+
 export function formatNumber(num: number): string {
   if (num >= 1_000_000_000) return `${(num / 1_000_000_000).toFixed(1)}B`;
   if (num >= 1_000_000) return `${(num / 1_000_000).toFixed(1)}M`;

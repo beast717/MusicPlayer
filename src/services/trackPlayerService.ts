@@ -1,4 +1,4 @@
-
+import { AppState } from 'react-native';
 import TrackPlayer, {
   Event,
   Capability,
@@ -7,6 +7,7 @@ import TrackPlayer, {
 } from 'react-native-track-player';
 import {
   usePlayerStore,
+  getUpcomingTracks,
   getSwitchingTrackId,
   isReorderingQueue,
   isSwappingTrack,
@@ -21,10 +22,14 @@ import {
   resolveTrackSource,
   toTrackPlayerTrack,
   PLACEHOLDER_URL,
+  prefetchStreams,
 } from './trackPlayerHelpers';
 
 /** Track IDs that have already been retried once to avoid infinite retry loops. */
 const retriedTrackIds = new Set<string>();
+
+/** Tracks to resolve ahead when the app leaves the foreground (~20 min of music). */
+const BACKGROUND_PREFETCH_COUNT = 5;
 
 /** TrackPlayer setup state flag */
 let isPlayerSetup = false;
@@ -191,8 +196,18 @@ export async function PlaybackService() {
           store.setError(err instanceof Error ? err.message : 'Failed to resolve stream');
         }
       }
+
+      getUpcomingTracks(1).then(prefetchStreams, () => {});
     }
   );
+
+  // Resolve several tracks ahead while the app is still awake: in the
+  // background iOS may pause the WebView that resolves streams
+  AppState.addEventListener('change', (state) => {
+    if (state === 'inactive' || state === 'background') {
+      getUpcomingTracks(BACKGROUND_PREFETCH_COUNT).then(prefetchStreams, () => {});
+    }
+  });
 }
 
 export async function setupTrackPlayer(): Promise<void> {

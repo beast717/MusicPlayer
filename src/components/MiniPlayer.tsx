@@ -17,6 +17,7 @@ import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
 import { usePlayerStore } from '../stores/playerStore';
 import { useProgress } from 'react-native-track-player';
+import { getDisplayDuration } from '../utils/helpers';
 
 interface MiniPlayerProps {
   onPress: () => void;
@@ -31,8 +32,8 @@ export function MiniPlayer({ onPress }: MiniPlayerProps) {
 
   const progress = useProgress(1000);
 
-  const progressPercent =
-    progress.duration > 0 ? progress.position / progress.duration : 0;
+  const duration = getDisplayDuration(currentTrack?.duration, progress.duration);
+  const progressPercent = duration > 0 ? Math.min(progress.position / duration, 1) : 0;
 
   if (!currentTrack) return null;
 

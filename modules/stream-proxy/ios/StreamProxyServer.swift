@@ -15,11 +15,13 @@ final class StreamProxyServer: @unchecked Sendable {
   private static let firstPieceSize: Int64 = 256 * 1024
   private static let maxPieceSize: Int64 = 8 * 1024 * 1024
 
-  // Listener state is only touched on this queue
+  // Listener state and the cache below are only touched on this queue
   private let queue = DispatchQueue(label: "musicplayer.streamproxy")
   private var listener: NWListener?
   private var port: Int?
   private var pendingStarts: [CheckedContinuation<Int, Error>] = []
+  // Per stream URL: header bytes to zero (see FragmentedMP4)
+  private var durationFieldsCache: [String: [ClosedRange<Int64>]] = [:]
 
   private let session: URLSession = {
     let config = URLSessionConfiguration.default
@@ -180,13 +182,22 @@ final class StreamProxyServer: @unchecked Sendable {
       return
     }
 
+    // Only requests that touch the file's start can contain the MP4 header
+    var durationFields: [ClosedRange<Int64>] = []
+    if start < FragmentedMP4.headerProbeSize {
+      durationFields = await durationFieldsToZero(for: request.upstream, length: total)
+    }
+
     var offset = start
     var pieceSize = Self.firstPieceSize
     var sentHeader = false
     do {
       while offset <= end {
         let pieceEnd = min(offset + pieceSize - 1, end)
-        let piece = try await fetch(request.upstream, from: offset, to: pieceEnd)
+        var piece = try await fetch(request.upstream, from: offset, to: pieceEnd)
+        if !durationFields.isEmpty {
+          piece = FragmentedMP4.zero(durationFields, in: piece, pieceStart: offset)
+        }
         let isLast = pieceEnd == end
         if sentHeader {
           try await send(piece, on: connection, isComplete: isLast)
@@ -213,6 +224,26 @@ final class StreamProxyServer: @unchecked Sendable {
         isComplete: true
       )
     }
+  }
+
+  /// Header bytes to zero for a stream, read once per URL. Empty if the header
+  /// can't be read; the stream then plays unchanged.
+  private func durationFieldsToZero(for url: URL, length: Int64) async -> [ClosedRange<Int64>] {
+    let key = url.absoluteString
+    if let cached = queue.sync(execute: { durationFieldsCache[key] }) {
+      return cached
+    }
+    let probeEnd = min(FragmentedMP4.headerProbeSize, length) - 1
+    guard let fileStart = try? await fetch(url, from: 0, to: probeEnd) else { return [] }
+
+    let fields = FragmentedMP4.durationFieldsToZero(inFileStart: fileStart)
+    queue.sync {
+      if durationFieldsCache.count >= 50 {
+        durationFieldsCache.removeAll()
+      }
+      durationFieldsCache[key] = fields
+    }
+    return fields
   }
 
   private func fetch(_ url: URL, from start: Int64, to end: Int64) async throws -> Data {
