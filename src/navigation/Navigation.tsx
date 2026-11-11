@@ -15,6 +15,7 @@ import { MINI_PLAYER_HEIGHT, TAB_BAR_HEIGHT } from '../theme/spacing';
 import { MiniPlayer } from '../components';
 import {
   HomeScreen,
+  MixDetailScreen,
   SearchScreen,
   PlayerScreen,
   LibraryScreen,
@@ -45,6 +46,7 @@ function HomeStackNavigator() {
   return (
     <HomeStack.Navigator screenOptions={{ headerShown: false }}>
       <HomeStack.Screen name="Home" component={HomeScreen} />
+      <HomeStack.Screen name="MixDetail" component={MixDetailScreen} />
     </HomeStack.Navigator>
   );
 }

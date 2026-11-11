@@ -13,6 +13,7 @@ export type TabParamList = {
 // Stack navigators inside each tab
 export type HomeStackParamList = {
   Home: undefined;
+  MixDetail: { mixId: string };
 };
 
 export type SearchStackParamList = {
@@ -42,6 +43,11 @@ export type RootStackParamList = {
 export type HomeScreenProps = CompositeScreenProps<
   NativeStackScreenProps<HomeStackParamList, 'Home'>,
   BottomTabScreenProps<TabParamList>
+>;
+
+export type MixDetailScreenProps = NativeStackScreenProps<
+  HomeStackParamList,
+  'MixDetail'
 >;
 
 export type SearchScreenProps = CompositeScreenProps<

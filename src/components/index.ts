@@ -6,3 +6,4 @@ export { DownloadButton } from './DownloadButton';
 export { AddToPlaylistModal } from './AddToPlaylistModal';
 export { TextInputModal } from './TextInputModal';
 export { ErrorBoundary } from './ErrorBoundary';
+export { MediaCard } from './MediaCard';

@@ -6,9 +6,11 @@ import {
   TouchableOpacity,
   Switch,
   Alert,
+  ActivityIndicator,
   StyleSheet,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import * as Updates from 'expo-updates';
 import {
   Volume2,
   Wifi,
@@ -18,12 +20,19 @@ import {
   ChevronRight,
   Check,
   Palette,
+  History,
+  RefreshCw,
 } from 'lucide-react-native';
 import { useTheme } from '../theme';
 import { PrimaryHue } from '../theme/colors';
 import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
-import { useSettingsStore, useLibraryStore } from '../stores';
+import {
+  useSettingsStore,
+  useLibraryStore,
+  useHistoryStore,
+  useHomeStore,
+} from '../stores';
 import { clearAllDownloads, getTotalDownloadsSize } from '../services/downloadManager';
 import { AudioQuality, APP_VERSION } from '../utils/constants';
 import { formatSize } from '../utils/helpers';
@@ -39,7 +48,12 @@ export function SettingsScreen() {
   const downloadedTracks = useLibraryStore((s) => s.downloadedTracks);
   const removeDownloadedTrack = useLibraryStore((s) => s.removeDownloadedTrack);
 
+  const historyCount = useHistoryStore((s) => Object.keys(s.stats).length);
+  const clearHistory = useHistoryStore((s) => s.clearHistory);
+  const refreshRecommendations = useHomeStore((s) => s.refresh);
+
   const [totalSize, setTotalSize] = useState(0);
+  const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
 
   useEffect(() => {
     getTotalDownloadsSize().then(setTotalSize);
@@ -109,6 +123,58 @@ export function SettingsScreen() {
         },
       ]
     );
+  };
+
+  const handleClearHistory = () => {
+    if (historyCount === 0) {
+      Alert.alert('No History', 'There is no listening history to clear.');
+      return;
+    }
+
+    Alert.alert(
+      'Clear Listening History',
+      'Recommendations on the home screen are based on this history and will start over.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Clear',
+          style: 'destructive',
+          onPress: () => {
+            clearHistory();
+            refreshRecommendations();
+          },
+        },
+      ]
+    );
+  };
+
+  const handleCheckForUpdate = async () => {
+    if (!Updates.isEnabled) {
+      Alert.alert('Updates Unavailable', 'This build does not support over-the-air updates.');
+      return;
+    }
+
+    setIsCheckingForUpdate(true);
+    try {
+      const check = await Updates.checkForUpdateAsync();
+      if (!check.isAvailable) {
+        Alert.alert('Up to Date', 'You already have the latest version.');
+        return;
+      }
+
+      await Updates.fetchUpdateAsync();
+      Alert.alert('Update Ready', 'Restart the app now to use the new version? Playback will stop.', [
+        { text: 'Later', style: 'cancel' },
+        { text: 'Restart', onPress: () => Updates.reloadAsync() },
+      ]);
+    } catch (err) {
+      Alert.alert(
+        'Update Failed',
+        err instanceof Error ? err.message : 'Could not check for updates.'
+      );
+    } finally {
+      setIsCheckingForUpdate(false);
+    }
   };
 
   const qualityLabel: Record<AudioQuality, string> = {
@@ -216,12 +282,25 @@ export function SettingsScreen() {
           </View>
 
           <TouchableOpacity
-            style={[styles.row, { borderBottomWidth: 0 }]}
+            style={[styles.row, { borderBottomColor: theme.border }]}
             onPress={handleClearDownloads}
           >
             <Trash2 size={20} color={theme.danger} />
             <Text style={[typography.body, { color: theme.danger, flex: 1 }]}>
               Clear All Downloads
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.row, { borderBottomWidth: 0 }]}
+            onPress={handleClearHistory}
+          >
+            <History size={20} color={theme.danger} />
+            <Text style={[typography.body, { color: theme.danger, flex: 1 }]}>
+              Clear Listening History
+            </Text>
+            <Text style={[typography.body, { color: theme.textSecondary }]}>
+              {historyCount} {historyCount === 1 ? 'song' : 'songs'}
             </Text>
           </TouchableOpacity>
         </View>
@@ -306,7 +385,7 @@ export function SettingsScreen() {
         </Text>
 
         <View style={[styles.section, { backgroundColor: theme.surface }]}>
-          <View style={[styles.row, { borderBottomWidth: 0 }]}>
+          <View style={[styles.row, { borderBottomColor: theme.border }]}>
             <Info size={20} color={theme.primary} />
             <Text style={[typography.body, { color: theme.text, flex: 1 }]}>
               Version
@@ -315,6 +394,22 @@ export function SettingsScreen() {
               {APP_VERSION}
             </Text>
           </View>
+
+          <TouchableOpacity
+            style={[styles.row, { borderBottomWidth: 0 }]}
+            onPress={handleCheckForUpdate}
+            disabled={isCheckingForUpdate}
+          >
+            <RefreshCw size={20} color={theme.primary} />
+            <Text style={[typography.body, { color: theme.text, flex: 1 }]}>
+              Check for Updates
+            </Text>
+            {isCheckingForUpdate ? (
+              <ActivityIndicator size="small" color={theme.primary} />
+            ) : (
+              <ChevronRight size={16} color={theme.textTertiary} />
+            )}
+          </TouchableOpacity>
         </View>
 
         <Text

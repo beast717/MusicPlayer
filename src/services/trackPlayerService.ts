@@ -14,8 +14,11 @@ import {
   setSwappingTrack,
   toTrackPlayerRepeatMode,
 } from '../stores/playerStore';
+import { useHistoryStore } from '../stores/historyStore';
+import { Track } from '../types';
 import { getAudioPlaybackSource, invalidateStreamCache } from './youtube';
 import { resetWebViewSession } from './StreamExtractorWebView';
+import { createListenTracker } from './listenTracker';
 import {
   buildTrackPlayerSource,
   getActiveTrackDebug,
@@ -30,6 +33,12 @@ const retriedTrackIds = new Set<string>();
 
 /** Tracks to resolve ahead when the app leaves the foreground (~20 min of music). */
 const BACKGROUND_PREFETCH_COUNT = 5;
+
+/** Feeds the listening history that drives the home screen recommendations. */
+const listenTracker = createListenTracker({
+  onPlay: (track) => useHistoryStore.getState().recordPlay(track),
+  onSkip: (track) => useHistoryStore.getState().recordSkip(track),
+});
 
 /** TrackPlayer setup state flag */
 let isPlayerSetup = false;
@@ -51,6 +60,32 @@ export async function PlaybackService() {
   TrackPlayer.addEventListener(Event.RemoteJumpBackward, async (event) => {
     const position = (await TrackPlayer.getProgress()).position;
     await TrackPlayer.seekTo(Math.max(0, position - event.interval));
+  });
+
+  // Record what is actually being listened to. The active track is read from
+  // the player itself: during a track switch the store can briefly be ahead
+  // of (or behind) what is audible.
+  TrackPlayer.addEventListener(Event.PlaybackProgressUpdated, async (event) => {
+    try {
+      const active = await TrackPlayer.getActiveTrack();
+      const id = active?.id != null ? String(active.id) : null;
+      if (!id) return;
+
+      const { queue, currentTrack } = usePlayerStore.getState();
+      const known =
+        (currentTrack?.id === id ? currentTrack : null) ??
+        queue.find((t) => t.id === id);
+      const track: Track = known ?? {
+        id,
+        title: active?.title ?? '',
+        artist: active?.artist ?? '',
+        duration: active?.duration ?? 0,
+        thumbnailUrl: typeof active?.artwork === 'string' ? active.artwork : '',
+      };
+      if (!track.title) return;
+
+      listenTracker.onProgress(track, event.position);
+    } catch {}
   });
 
   // Handle playback errors with automatic retry.

@@ -1,46 +1,172 @@
-import React, { useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
   View,
   Text,
   ScrollView,
   FlatList,
   TouchableOpacity,
-  Image,
+  ActivityIndicator,
+  RefreshControl,
   StyleSheet,
   useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import {
-  Play,
   Shuffle,
   Clock,
   Heart,
   TrendingUp,
 } from 'lucide-react-native';
-import { TrackItem, PlaylistCard } from '../components';
+import { TrackItem, PlaylistCard, MediaCard } from '../components';
 import { useTheme } from '../theme';
 import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
-import { usePlayerStore, useLibraryStore } from '../stores';
+import {
+  usePlayerStore,
+  useLibraryStore,
+  useHistoryStore,
+  useHomeStore,
+} from '../stores';
+import {
+  getListenAgain,
+  getForgottenFavorites,
+  primaryArtist,
+} from '../services/recommendations';
 import { Track } from '../types';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
+
+const QUICK_PICK_ROWS = 4;
+
+function chunk<T>(items: T[], size: number): T[][] {
+  const chunks: T[][] = [];
+  for (let i = 0; i < items.length; i += size) {
+    chunks.push(items.slice(i, i + size));
+  }
+  return chunks;
+}
+
+interface TrackRowSectionProps {
+  title: string;
+  subtitle?: string;
+  tracks: Track[];
+  currentTrackId?: string;
+  onPressTrack: (tracks: Track[], index: number) => void;
+}
+
+/** A titled, horizontally scrolling row of track cards. */
+function TrackRowSection({
+  title,
+  subtitle,
+  tracks,
+  currentTrackId,
+  onPressTrack,
+}: TrackRowSectionProps) {
+  const { theme } = useTheme();
+
+  return (
+    <View style={styles.section}>
+      <View style={styles.sectionTitle}>
+        {!!subtitle && (
+          <Text
+            style={[
+              typography.caption1,
+              { color: theme.textSecondary, textTransform: 'uppercase', letterSpacing: 1 },
+            ]}
+          >
+            {subtitle}
+          </Text>
+        )}
+        <Text numberOfLines={1} style={[typography.title2, { color: theme.text }]}>
+          {title}
+        </Text>
+      </View>
+      <FlatList
+        horizontal
+        data={tracks}
+        keyExtractor={(item) => item.id}
+        renderItem={({ item, index }) => (
+          <MediaCard
+            imageUrl={item.localThumbnailPath || item.thumbnailUrl}
+            title={item.title}
+            subtitle={item.artist}
+            active={currentTrackId === item.id}
+            onPress={() => onPressTrack(tracks, index)}
+          />
+        )}
+        showsHorizontalScrollIndicator={false}
+        contentContainerStyle={{ paddingHorizontal: spacing.lg }}
+      />
+    </View>
+  );
+}
 
 export function HomeScreen() {
   const { width: SCREEN_WIDTH } = useWindowDimensions();
-  const { theme, isDark } = useTheme();
+  const { theme } = useTheme();
   const navigation = useNavigation<any>();
   const recentlyPlayed = usePlayerStore((s) => s.recentlyPlayed);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
-  const playTrack = usePlayerStore((s) => s.playTrack);
   const playQueue = usePlayerStore((s) => s.playQueue);
+  const shufflePlay = usePlayerStore((s) => s.shufflePlay);
   const favorites = useLibraryStore((s) => s.favorites);
   const playlists = useLibraryStore((s) => s.playlists);
+  const historyStats = useHistoryStore((s) => s.stats);
+  const quickPicks = useHomeStore((s) => s.quickPicks);
+  const mixes = useHomeStore((s) => s.mixes);
+  const becauseYouListened = useHomeStore((s) => s.becauseYouListened);
+  const isLoadingRecommendations = useHomeStore((s) => s.isLoading);
+  const refreshRecommendations = useHomeStore((s) => s.refresh);
+  const refreshIfStale = useHomeStore((s) => s.refreshIfStale);
+
+  const [isRefreshing, setIsRefreshing] = useState(false);
 
   const greeting = getGreeting();
 
-  const handlePlayTrack = useCallback(async (track: Track) => {
-    await playTrack(track);
-  }, [playTrack]);
+  // Rebuild recommendations when the tab is opened and they are getting old
+  useFocusEffect(
+    useCallback(() => {
+      refreshIfStale();
+    }, [refreshIfStale])
+  );
+
+  const handleRefresh = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      await refreshRecommendations({ force: true });
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, [refreshRecommendations]);
+
+  const handlePlayFrom = useCallback(
+    (tracks: Track[], index: number) => {
+      playQueue(tracks, index);
+    },
+    [playQueue]
+  );
+
+  const listenAgain = useMemo(
+    () => getListenAgain(historyStats, Date.now()),
+    [historyStats]
+  );
+  const forgottenFavorites = useMemo(
+    () => getForgottenFavorites(historyStats, Date.now()),
+    [historyStats]
+  );
+  const quickPickColumns = useMemo(
+    () => chunk(quickPicks, QUICK_PICK_ROWS),
+    [quickPicks]
+  );
+  // Narrower than the screen so the next column peeks in
+  const quickPickColumnWidth = SCREEN_WIDTH - spacing.huge;
+
+  const hasRecommendations =
+    quickPicks.length > 0 || mixes.length > 0 || becauseYouListened != null;
+  const hasAnything =
+    recentlyPlayed.length > 0 ||
+    favorites.length > 0 ||
+    playlists.length > 0 ||
+    listenAgain.length > 0;
 
   return (
     <SafeAreaView
@@ -50,6 +176,13 @@ export function HomeScreen() {
       <ScrollView
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: MINI_PLAYER_HEIGHT + 20 }}
+        refreshControl={
+          <RefreshControl
+            refreshing={isRefreshing}
+            onRefresh={handleRefresh}
+            tintColor={theme.primary}
+          />
+        }
       >
         {/* Header */}
         <View style={styles.header}>
@@ -99,11 +232,7 @@ export function HomeScreen() {
                   styles.quickActionCard,
                   { backgroundColor: theme.card },
                 ]}
-                onPress={() => {
-                  if (recentlyPlayed.length > 0) {
-                    playQueue(recentlyPlayed);
-                  }
-                }}
+                onPress={() => playQueue(recentlyPlayed)}
               >
                 <View
                   style={[
@@ -127,69 +256,121 @@ export function HomeScreen() {
           </View>
         )}
 
-        {/* Recently Played */}
-        {recentlyPlayed.length > 0 && (
+        {/* First load of recommendations */}
+        {isLoadingRecommendations && !hasRecommendations && (
+          <View style={styles.loadingRow}>
+            <ActivityIndicator size="small" color={theme.primary} />
+            <Text style={[typography.footnote, { color: theme.textSecondary }]}>
+              Picking songs for you…
+            </Text>
+          </View>
+        )}
+
+        {/* Quick Picks */}
+        {quickPicks.length > 0 && (
           <View style={styles.section}>
             <View style={styles.sectionHeader}>
               <Text style={[typography.title2, { color: theme.text }]}>
-                Recently Played
+                Quick Picks
               </Text>
-              {recentlyPlayed.length > 5 && (
-                <TouchableOpacity>
-                  <Text style={[typography.subheadline, { color: theme.primary }]}>
-                    See All
-                  </Text>
-                </TouchableOpacity>
-              )}
+              <TouchableOpacity
+                onPress={() => playQueue(quickPicks)}
+                style={[styles.pillButton, { backgroundColor: theme.primary }]}
+                accessibilityRole="button"
+                accessibilityLabel="Play all quick picks"
+              >
+                <Text style={[typography.caption1, { color: '#FFF', fontWeight: '600' }]}>
+                  Play All
+                </Text>
+              </TouchableOpacity>
             </View>
-
             <FlatList
               horizontal
-              data={recentlyPlayed.slice(0, 10)}
+              data={quickPickColumns}
+              keyExtractor={(column) => column[0].id}
+              renderItem={({ item: column, index: columnIndex }) => (
+                <View style={{ width: quickPickColumnWidth }}>
+                  {column.map((track, rowIndex) => (
+                    <TrackItem
+                      key={track.id}
+                      track={track}
+                      onPress={() =>
+                        handlePlayFrom(
+                          quickPicks,
+                          columnIndex * QUICK_PICK_ROWS + rowIndex
+                        )
+                      }
+                      isPlaying={currentTrack?.id === track.id}
+                      compact
+                    />
+                  ))}
+                </View>
+              )}
+              snapToInterval={quickPickColumnWidth}
+              decelerationRate="fast"
+              showsHorizontalScrollIndicator={false}
+            />
+          </View>
+        )}
+
+        {/* Mixes */}
+        {mixes.length > 0 && (
+          <View style={styles.section}>
+            <View style={styles.sectionTitle}>
+              <Text style={[typography.title2, { color: theme.text }]}>
+                Mixes for You
+              </Text>
+            </View>
+            <FlatList
+              horizontal
+              data={mixes}
               keyExtractor={(item) => item.id}
               renderItem={({ item }) => (
-                <TouchableOpacity
-                  style={styles.recentCard}
-                  onPress={() => handlePlayTrack(item)}
-                  activeOpacity={0.7}
-                >
-                  <Image
-                    source={{
-                      uri: item.localThumbnailPath || item.thumbnailUrl,
-                    }}
-                    style={[
-                      styles.recentImage,
-                      { borderRadius: borderRadius.md, backgroundColor: theme.card },
-                    ]}
-                  />
-                  <Text
-                    numberOfLines={2}
-                    style={[
-                      typography.caption1,
-                      {
-                        color: theme.text,
-                        fontWeight: '500',
-                        marginTop: spacing.sm,
-                      },
-                    ]}
-                  >
-                    {item.title}
-                  </Text>
-                  <Text
-                    numberOfLines={1}
-                    style={[
-                      typography.caption2,
-                      { color: theme.textSecondary },
-                    ]}
-                  >
-                    {item.artist}
-                  </Text>
-                </TouchableOpacity>
+                <MediaCard
+                  imageUrl={item.coverUrl}
+                  title={item.title}
+                  subtitle={item.subtitle}
+                  size={160}
+                  onPress={() => navigation.navigate('MixDetail', { mixId: item.id })}
+                />
               )}
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={{ paddingHorizontal: spacing.lg }}
             />
           </View>
+        )}
+
+        {/* Listen Again */}
+        {listenAgain.length > 0 && (
+          <TrackRowSection
+            title="Listen Again"
+            tracks={listenAgain}
+            currentTrackId={currentTrack?.id}
+            onPressTrack={handlePlayFrom}
+          />
+        )}
+
+        {/* Because You Listened To */}
+        {becauseYouListened && becauseYouListened.tracks.length > 0 && (
+          <TrackRowSection
+            subtitle="Because you listened to"
+            title={`${becauseYouListened.seed.title} · ${primaryArtist(
+              becauseYouListened.seed.artist
+            )}`}
+            tracks={becauseYouListened.tracks}
+            currentTrackId={currentTrack?.id}
+            onPressTrack={handlePlayFrom}
+          />
+        )}
+
+        {/* Recently Played */}
+        {recentlyPlayed.length > 0 && (
+          <TrackRowSection
+            title="Recently Played"
+            tracks={recentlyPlayed.slice(0, 10)}
+            currentTrackId={currentTrack?.id}
+            onPressTrack={handlePlayFrom}
+          />
         )}
 
         {/* Your Playlists */}
@@ -227,6 +408,16 @@ export function HomeScreen() {
           </View>
         )}
 
+        {/* Forgotten Favourites */}
+        {forgottenFavorites.length > 0 && (
+          <TrackRowSection
+            title="Forgotten Favourites"
+            tracks={forgottenFavorites}
+            currentTrackId={currentTrack?.id}
+            onPressTrack={handlePlayFrom}
+          />
+        )}
+
         {/* Favorites Quick Play */}
         {favorites.length > 0 && (
           <View style={styles.section}>
@@ -235,8 +426,8 @@ export function HomeScreen() {
                 Liked Songs
               </Text>
               <TouchableOpacity
-                onPress={() => playQueue(favorites)}
-                style={[styles.shuffleButton, { backgroundColor: theme.primary }]}
+                onPress={() => shufflePlay(favorites)}
+                style={[styles.pillButton, { backgroundColor: theme.primary }]}
               >
                 <Shuffle size={14} color="#FFF" />
                 <Text style={[typography.caption1, { color: '#FFF', fontWeight: '600' }]}>
@@ -259,7 +450,7 @@ export function HomeScreen() {
         )}
 
         {/* Empty State */}
-        {recentlyPlayed.length === 0 && favorites.length === 0 && playlists.length === 0 && (
+        {!hasAnything && !hasRecommendations && (
           <View style={styles.emptyState}>
             <TrendingUp size={64} color={theme.textTertiary} />
             <Text
@@ -281,7 +472,7 @@ export function HomeScreen() {
                 },
               ]}
             >
-              Search for your favorite music and start listening. Your recently played songs and playlists will appear here.
+              Search for your favorite music and start listening. Recommendations based on what you play will appear here.
             </Text>
             <TouchableOpacity
               onPress={() => navigation.navigate('SearchTab')}
@@ -339,6 +530,13 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
   },
+  loadingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.xl,
+  },
   section: {
     marginBottom: spacing.xxl,
   },
@@ -349,15 +547,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     marginBottom: spacing.md,
   },
-  recentCard: {
-    width: 140,
-    marginRight: spacing.md,
+  sectionTitle: {
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.md,
   },
-  recentImage: {
-    width: 140,
-    height: 140,
-  },
-  shuffleButton: {
+  pillButton: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: spacing.xs,

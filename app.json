@@ -58,6 +58,15 @@
         "projectId": "10a2332e-e791-446c-b65f-004e98a527df"
       }
     },
-    "owner": "beast771"
+    "owner": "beast771",
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/10a2332e-e791-446c-b65f-004e98a527df",
+      "requestHeaders": {
+        "expo-channel-name": "production"
+      }
+    }
   }
 }

@@ -31,12 +31,14 @@
       "distribution": "internal",
       "ios": {
         "buildConfiguration": "Release"
-      }
+      },
+      "channel": "production"
     },
     "production": {
       "ios": {
         "buildConfiguration": "Release"
-      }
+      },
+      "channel": "production"
     }
   }
 }

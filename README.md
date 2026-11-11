@@ -17,6 +17,7 @@ A free, open-source music streaming app for iOS built with React Native and Expo
 - **Dark Theme** — Clean, dark UI designed for comfortable use
 - **Search History** — Remembers recent searches for quick access
 - **Recently Played** — See your listening history on the home screen
+- **Personalised Home** — Quick Picks, Mixes for You, Listen Again and "Because you listened to…" built from your listening history (kept on the device) and YouTube Music's song radios
 
 ## Tech Stack
 
@@ -100,6 +101,16 @@ npm update youtubei.js bgutils-js
 ```
 
 Then rebuild the IPA and re-sideload. Both projects are maintained actively and usually ship fixes within days of a YouTube change.
+
+## Over-the-Air Updates
+
+JavaScript-only changes don't need a new build. Publish them with:
+
+```bash
+npm run ota -- "what changed"
+```
+
+The app downloads the update on launch and uses it on the next start, or immediately via **Settings → Check for Updates**. Changes that add or upgrade native modules still need a new build; bump `version` in `app.json` when you make one, so older installs don't receive JavaScript they can't run.
 
 ## License
 

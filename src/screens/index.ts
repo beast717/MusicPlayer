@@ -1,4 +1,5 @@
 export { HomeScreen } from './HomeScreen';
+export { MixDetailScreen } from './MixDetailScreen';
 export { SearchScreen } from './SearchScreen';
 export { PlayerScreen } from './PlayerScreen';
 export { LibraryScreen } from './LibraryScreen';
