@@ -25,6 +25,7 @@ import {
   Palette,
   History,
   RefreshCw,
+  Radio,
 } from 'lucide-react-native';
 import { useTheme } from '../theme';
 import { PrimaryHue } from '../theme/colors';
@@ -46,6 +47,8 @@ export function SettingsScreen() {
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
   const downloadOverWifiOnly = useSettingsStore((s) => s.downloadOverWifiOnly);
   const setDownloadOverWifiOnly = useSettingsStore((s) => s.setDownloadOverWifiOnly);
+  const keepPlayingSimilar = useSettingsStore((s) => s.keepPlayingSimilar);
+  const setKeepPlayingSimilar = useSettingsStore((s) => s.setKeepPlayingSimilar);
   const autoDownloadFavorites = useSettingsStore((s) => s.autoDownloadFavorites);
   const setAutoDownloadFavorites = useSettingsStore((s) => s.setAutoDownloadFavorites);
   const favorites = useLibraryStore((s) => s.favorites);
@@ -259,6 +262,24 @@ export function SettingsScreen() {
         </Text>
 
         <View style={[styles.section, { backgroundColor: theme.surface }]}>
+          <View style={[styles.row, { borderBottomColor: theme.border }]}>
+            <Radio size={20} color={theme.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={[typography.body, { color: theme.text }]}>
+                Keep playing similar songs
+              </Text>
+              <Text style={[typography.caption1, { color: theme.textSecondary }]}>
+                When the queue ends (not while repeating)
+              </Text>
+            </View>
+            <Switch
+              value={keepPlayingSimilar}
+              onValueChange={setKeepPlayingSimilar}
+              trackColor={{ false: theme.border, true: theme.primary + '60' }}
+              thumbColor={keepPlayingSimilar ? theme.primary : theme.textTertiary}
+            />
+          </View>
+
           <TouchableOpacity
             style={[styles.row, { borderBottomColor: theme.border }]}
             onPress={handleAudioQuality}

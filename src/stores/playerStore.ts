@@ -12,8 +12,13 @@ import {
   PLACEHOLDER_URL,
   PlayerTrackSource,
 } from '../services/trackPlayerHelpers';
+import { getRadioTracks } from '../services/youtubeMusic';
+import { createTaste, pickRadioContinuation } from '../services/recommendations';
 import { MAX_RECENT_TRACKS } from '../utils/constants';
 import { shuffleArray } from '../utils/helpers';
+import { useHistoryStore } from './historyStore';
+import { useLibraryStore } from './libraryStore';
+import { useSettingsStore } from './settingsStore';
 
 // ─── Concurrency helpers ────────────────────────────────────────────
 // Latest-wins pattern: each playTrack/playQueue call gets a unique nonce.
@@ -34,6 +39,16 @@ let _isReorderingQueue = false;
 // stream (remove + add + skip). The queue must not be rearranged meanwhile.
 let _isSwappingTrack = false;
 
+// True while continueWithSimilar is looking for similar songs (one at a time)
+let _isExtendingQueue = false;
+
+// True while those songs are being appended. Shuffle must not rebuild the
+// queue in that short window, or the store and the player would disagree.
+let _isAppendingQueue = false;
+
+/** Add similar songs once this few (or fewer) are left after the playing one. */
+const RADIO_MIN_UPCOMING = 2;
+
 export function setSwappingTrack(value: boolean): void {
   _isSwappingTrack = value;
 }
@@ -48,6 +63,16 @@ export function getSwitchingTrackId(): string | null {
 
 export function isReorderingQueue(): boolean {
   return _isReorderingQueue;
+}
+
+/** Resolves once `condition` is false, or after `timeoutMs` with false. */
+async function waitUntilClear(condition: () => boolean, timeoutMs: number): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (condition()) {
+    if (Date.now() >= deadline) return false;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  return true;
 }
 
 /** The next `count` tracks after the playing one, in play order (wrapping when repeating the queue). */
@@ -92,6 +117,8 @@ interface PlayerState {
   repeatMode: RepeatModeType;
   isLoading: boolean;
   error: string | null;
+  /** Songs the radio appended because the queue was running out. */
+  autoQueuedIds: string[];
 }
 
 interface PlayQueueOptions {
@@ -112,6 +139,11 @@ interface PlayerActions {
   seekTo: (position: number) => Promise<void>;
   toggleShuffle: () => Promise<void>;
   cycleRepeatMode: () => Promise<void>;
+  /**
+   * Append songs similar to the playing one when at most `minUpcoming` are
+   * left in the queue. Resolves to whether anything was added.
+   */
+  continueWithSimilar: (options?: { minUpcoming?: number }) => Promise<boolean>;
   setIsPlaying: (playing: boolean) => void;
   setCurrentTrack: (track: Track | null) => void;
   setError: (error: string | null) => void;
@@ -138,13 +170,21 @@ export const usePlayerStore = create<PlayerStore>()(
       repeatMode: 'off' as RepeatModeType,
       isLoading: false,
       error: null,
+      autoQueuedIds: [],
 
       // Actions
       playTrack: async (track: Track) => {
         // Latest-wins: grab a unique nonce; bail out if superseded
         const myNonce = ++_switchNonce;
         _switchingTrackId = track.id;
-        set({ isLoading: true, error: null, queue: [track], originalQueue: [track] });
+        let started = false;
+        set({
+          isLoading: true,
+          error: null,
+          queue: [track],
+          originalQueue: [track],
+          autoQueuedIds: [],
+        });
         try {
           const source = await resolveTrackSource(track);
           if (myNonce !== _switchNonce) return;
@@ -173,6 +213,7 @@ export const usePlayerStore = create<PlayerStore>()(
             isLoading: false,
             recentlyPlayed: recent.slice(0, MAX_RECENT_TRACKS),
           });
+          started = true;
         } catch (err: unknown) {
           // Only show error if we're still the active switch
           if (myNonce === _switchNonce) {
@@ -184,6 +225,8 @@ export const usePlayerStore = create<PlayerStore>()(
         } finally {
           if (myNonce === _switchNonce) {
             _switchingTrackId = null;
+            // A single song: line up similar ones to follow it
+            if (started) get().continueWithSimilar();
           }
         }
       },
@@ -204,11 +247,13 @@ export const usePlayerStore = create<PlayerStore>()(
         // Latest-wins: grab a unique nonce; bail out if superseded
         const myNonce = ++_switchNonce;
         _switchingTrackId = firstTrack.id;
+        let started = false;
         set({
           isLoading: true,
           error: null,
           queue: orderedTracks,
           originalQueue: tracks,
+          autoQueuedIds: [],
           ...(options.shuffle ? { shuffleMode: 'on' as ShuffleMode } : {}),
         });
 
@@ -251,6 +296,7 @@ export const usePlayerStore = create<PlayerStore>()(
           });
 
           getUpcomingTracks(1).then(prefetchStreams, () => {});
+          started = true;
         } catch (err: unknown) {
           if (myNonce === _switchNonce) {
             set({
@@ -261,6 +307,8 @@ export const usePlayerStore = create<PlayerStore>()(
         } finally {
           if (myNonce === _switchNonce) {
             _switchingTrackId = null;
+            // Started near the end of a short queue
+            if (started) get().continueWithSimilar();
           }
         }
       },
@@ -301,7 +349,7 @@ export const usePlayerStore = create<PlayerStore>()(
       },
 
       clearQueue: async () => {
-        set({ queue: [], originalQueue: [] });
+        set({ queue: [], originalQueue: [], autoQueuedIds: [] });
         try {
           await TrackPlayer.reset();
         } catch (err) {
@@ -352,7 +400,14 @@ export const usePlayerStore = create<PlayerStore>()(
       toggleShuffle: async () => {
         // Ignore taps while a track switch, placeholder swap or another reorder
         // is in flight; the queue being changed would not match the new mode.
-        if (_isReorderingQueue || _isSwappingTrack || _switchingTrackId != null) return;
+        if (
+          _isReorderingQueue ||
+          _isSwappingTrack ||
+          _isAppendingQueue ||
+          _switchingTrackId != null
+        ) {
+          return;
+        }
 
         const { shuffleMode, queue, originalQueue } = get();
         const nextMode: ShuffleMode = shuffleMode === 'off' ? 'on' : 'off';
@@ -432,6 +487,75 @@ export const usePlayerStore = create<PlayerStore>()(
           set({ repeatMode: next });
         } catch (err) {
           console.warn('Failed to set repeat mode:', err);
+        }
+      },
+
+      continueWithSimilar: async ({ minUpcoming = RADIO_MIN_UPCOMING } = {}) => {
+        if (!useSettingsStore.getState().keepPlayingSimilar) return false;
+        // Appending at the end is safe during a placeholder swap (indexes
+        // before the end don't move), but not while the queue is rebuilt
+        if (_isExtendingQueue || _isReorderingQueue || _switchingTrackId != null) return false;
+        if (get().repeatMode !== 'off' || get().queue.length === 0) return false;
+
+        _isExtendingQueue = true;
+        const myNonce = _switchNonce;
+        try {
+          const activeIndex = await TrackPlayer.getActiveTrackIndex();
+          const { queue, currentTrack } = get();
+          if (activeIndex == null || queue.length - 1 - activeIndex > minUpcoming) return false;
+
+          const { stats, notInterested } = useHistoryStore.getState();
+          const taste = createTaste(stats, useLibraryStore.getState().favorites, notInterested);
+
+          // Radio of the playing song; if it has nothing new, that of the last queued one
+          const seeds = [queue[activeIndex] ?? currentTrack, queue[queue.length - 1]].filter(
+            (t, i, all): t is Track => !!t && all.findIndex((o) => o?.id === t.id) === i
+          );
+
+          let additions: Track[] = [];
+          for (const seed of seeds) {
+            try {
+              const radio = await getRadioTracks(seed.id);
+              if (myNonce !== _switchNonce) return false;
+              additions = pickRadioContinuation(radio, get().queue, taste, Date.now());
+            } catch {
+              // Offline or no radio for this song: try the next seed
+              continue;
+            }
+            if (additions.length > 0) break;
+          }
+
+          // Shuffle may be rearranging the queue right now: append once it is done
+          if (additions.length > 0 && !(await waitUntilClear(() => _isReorderingQueue, 2000))) {
+            return false;
+          }
+          // A new queue may have started while the radio loaded
+          if (myNonce !== _switchNonce) return false;
+          const queuedIds = new Set(get().queue.map((t) => t.id));
+          additions = additions.filter((t) => !queuedIds.has(t.id));
+          if (additions.length === 0) return false;
+
+          _isAppendingQueue = true;
+          try {
+            set((state) => ({
+              queue: [...state.queue, ...additions],
+              originalQueue: [...state.originalQueue, ...additions],
+              autoQueuedIds: [...state.autoQueuedIds, ...additions.map((t) => t.id)],
+            }));
+            await TrackPlayer.add(
+              additions.map((t) => toTrackPlayerTrack(t, lazyTrackSource(t)))
+            );
+          } finally {
+            _isAppendingQueue = false;
+          }
+
+          getUpcomingTracks(1).then(prefetchStreams, () => {});
+          return true;
+        } catch (err) {
+          console.warn('Failed to add similar songs:', err);
+          return false;
+        } finally {
+          _isExtendingQueue = false;
         }
       },
 

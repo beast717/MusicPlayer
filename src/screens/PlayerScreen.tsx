@@ -57,6 +57,9 @@ export function PlayerScreen({ onDismiss, onOpenArtist }: PlayerScreenProps) {
   const seekTo = usePlayerStore((s) => s.seekTo);
   const toggleShuffle = usePlayerStore((s) => s.toggleShuffle);
   const cycleRepeatMode = usePlayerStore((s) => s.cycleRepeatMode);
+  const isAutoQueued = usePlayerStore((s) =>
+    s.currentTrack ? s.autoQueuedIds.includes(s.currentTrack.id) : false
+  );
 
   // Debounced handlers (must be after the above definitions)
   const debouncedSkipToNext = useDebouncedCallback(skipToNext, 300);
@@ -180,7 +183,7 @@ export function PlayerScreen({ onDismiss, onOpenArtist }: PlayerScreenProps) {
               { color: theme.text, fontWeight: '600' },
             ]}
           >
-            Now Playing
+            {isAutoQueued ? 'Similar songs' : 'Now Playing'}
           </Text>
         </View>
         <TouchableOpacity onPress={onDismiss} style={styles.headerButton} accessibilityRole="button" accessibilityLabel="View playlist">

@@ -1,6 +1,7 @@
 import { Track } from '../../types';
 
 const mockPrefetch = jest.fn();
+let mockRadio: (id: string) => Promise<any[]> = async () => [];
 
 // In-memory TrackPlayer with the queue semantics the store relies on
 const mockTp = {
@@ -68,7 +69,13 @@ jest.mock('../../services/trackPlayerHelpers', () => ({
   prefetchStreams: (...args: unknown[]) => mockPrefetch(...args),
 }));
 
+jest.mock('../../services/youtubeMusic', () => ({
+  getRadioTracks: (id: string) => mockRadio(id),
+}));
+
 import { usePlayerStore, getUpcomingTracks } from '../playerStore';
+import { useHistoryStore } from '../historyStore';
+import { useSettingsStore } from '../settingsStore';
 
 const PLACEHOLDER_URL = 'https://placeholder.invalid';
 const RepeatMode = { Off: 0, Track: 1, Queue: 2 };
@@ -88,8 +95,17 @@ const state = () => usePlayerStore.getState();
 // toggleShuffle releases its reorder lock on a 100ms timer
 const waitForReorderLock = () => new Promise((r) => setTimeout(r, 150));
 
+// Let fire-and-forget work (the radio extension) finish
+const flush = async () => {
+  for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r));
+};
+
 beforeEach(async () => {
   await waitForReorderLock();
+  await flush();
+  mockRadio = async () => [];
+  useHistoryStore.getState().clearHistory();
+  useSettingsStore.setState({ keepPlayingSimilar: true });
   usePlayerStore.setState({ shuffleMode: 'off', repeatMode: 'off' });
 });
 
@@ -213,5 +229,124 @@ describe('upcoming tracks', () => {
     await state().playTrack(tracks[0]);
 
     expect(await getUpcomingTracks(5)).toEqual([]);
+  });
+});
+
+describe('keep playing similar songs', () => {
+  const song = (id: string): Track => ({ id, title: id, artist: `Artist ${id}`, duration: 1, thumbnailUrl: '' });
+  const radioOf = (id: string) => [song(id), ...Array.from({ length: 5 }, (_, i) => song(`${id}-r${i}`))];
+
+  it('lines up similar songs after a single song, as placeholders resolved later', async () => {
+    const asked: string[] = [];
+    mockRadio = async (id) => {
+      asked.push(id);
+      return radioOf(id);
+    };
+
+    await state().playTrack(song('seed'));
+    await flush();
+
+    const expected = ['seed', 'seed-r0', 'seed-r1', 'seed-r2', 'seed-r3', 'seed-r4'];
+    expect(asked).toEqual(['seed']);
+    expect(storeIds()).toEqual(expected);
+    expect(tpIds()).toEqual(expected);
+    expect(state().originalQueue.map((t) => t.id)).toEqual(expected);
+    expect(mockTp.queue.slice(1).every((t) => t.url === PLACEHOLDER_URL)).toBe(true);
+    expect(state().autoQueuedIds).toEqual(expected.slice(1));
+  });
+
+  it('waits until at most two songs are left', async () => {
+    const radio = jest.fn(async (id: string) => radioOf(id));
+    mockRadio = radio;
+
+    await state().playQueue(tracks, 5);
+    await flush();
+    expect(radio).not.toHaveBeenCalled();
+    expect(await state().continueWithSimilar()).toBe(false);
+
+    mockTp.active = 7;
+    expect(await state().continueWithSimilar()).toBe(true);
+    expect(radio).toHaveBeenCalledWith('t7');
+    expect(storeIds()).toHaveLength(15);
+    expect(tpIds()).toEqual(storeIds());
+  });
+
+  it('does nothing while repeating or when turned off', async () => {
+    const radio = jest.fn(async (id: string) => radioOf(id));
+    mockRadio = radio;
+
+    usePlayerStore.setState({ repeatMode: 'queue' });
+    await state().playTrack(song('a'));
+    await flush();
+    usePlayerStore.setState({ repeatMode: 'off' });
+    useSettingsStore.setState({ keepPlayingSimilar: false });
+    expect(await state().continueWithSimilar()).toBe(false);
+
+    expect(radio).not.toHaveBeenCalled();
+    expect(storeIds()).toEqual(['a']);
+  });
+
+  it('leaves out queued, disliked and just-heard songs', async () => {
+    useHistoryStore.getState().markNotInterested('seed-r0');
+    useHistoryStore.getState().recordPlay(song('seed-r1'));
+    useHistoryStore.getState().recordPlay(song('seed-r2'), Date.now() - 3 * 60 * 60 * 1000);
+    mockRadio = async (id) => [...radioOf(id), song('seed')];
+
+    await state().playTrack(song('seed'));
+    await flush();
+
+    expect(storeIds()).toEqual(['seed', 'seed-r2', 'seed-r3', 'seed-r4']);
+  });
+
+  it("falls back to the last queued song's radio, and gives up quietly offline", async () => {
+    await state().playQueue([song('x'), song('y')], 0);
+    await flush();
+
+    mockRadio = async (id) => {
+      if (id === 'x') throw new Error('offline');
+      return radioOf(id);
+    };
+    expect(await state().continueWithSimilar()).toBe(true);
+    expect(storeIds()).toEqual(['x', 'y', 'y-r0', 'y-r1', 'y-r2', 'y-r3', 'y-r4']);
+
+    mockTp.active = 6;
+    mockRadio = async () => {
+      throw new Error('offline');
+    };
+    expect(await state().continueWithSimilar()).toBe(false);
+    expect(storeIds()).toHaveLength(7);
+  });
+
+  it('drops the radio when a new queue starts while it loads', async () => {
+    let release!: () => void;
+    mockRadio = (id) => new Promise((resolve) => (release = () => resolve(radioOf(id))));
+
+    await state().playTrack(song('old'));
+    mockRadio = async () => [];
+    await state().playQueue(tracks, 0);
+    release();
+    await flush();
+
+    expect(storeIds()).toEqual(tracks.map((t) => t.id));
+    expect(tpIds()).toEqual(storeIds());
+    expect(state().autoQueuedIds).toEqual([]);
+  });
+
+  it('lets shuffle work while similar songs load, and stays in sync', async () => {
+    let release!: () => void;
+    mockRadio = (id) => new Promise((resolve) => (release = () => resolve(radioOf(id))));
+
+    await state().playQueue([song('a'), song('b'), song('c')], 0);
+    await flush();
+    await state().toggleShuffle();
+    expect(state().shuffleMode).toBe('on');
+    expect(storeIds()[0]).toBe('a');
+
+    release();
+    await waitForReorderLock();
+    await flush();
+    expect(storeIds()).toHaveLength(8);
+    expect(storeIds().slice(3)).toEqual(['a-r0', 'a-r1', 'a-r2', 'a-r3', 'a-r4']);
+    expect(tpIds()).toEqual(storeIds());
   });
 });

@@ -9,6 +9,8 @@ interface SettingsState {
   downloadOverWifiOnly: boolean;
   /** Download every liked song automatically. */
   autoDownloadFavorites: boolean;
+  /** When the queue runs out, keep going with songs similar to what played. */
+  keepPlayingSimilar: boolean;
   primaryHue: PrimaryHue;
 }
 
@@ -16,6 +18,7 @@ interface SettingsActions {
   setAudioQuality: (quality: AudioQuality) => void;
   setDownloadOverWifiOnly: (value: boolean) => void;
   setAutoDownloadFavorites: (value: boolean) => void;
+  setKeepPlayingSimilar: (value: boolean) => void;
   setPrimaryHue: (hue: PrimaryHue) => void;
 }
 
@@ -27,11 +30,13 @@ export const useSettingsStore = create<SettingsStore>()(
       audioQuality: 'high' as AudioQuality,
       downloadOverWifiOnly: true,
       autoDownloadFavorites: false,
+      keepPlayingSimilar: true,
       primaryHue: 'navy' as PrimaryHue,
 
       setAudioQuality: (quality: AudioQuality) => set({ audioQuality: quality }),
       setDownloadOverWifiOnly: (value: boolean) => set({ downloadOverWifiOnly: value }),
       setAutoDownloadFavorites: (value: boolean) => set({ autoDownloadFavorites: value }),
+      setKeepPlayingSimilar: (value: boolean) => set({ keepPlayingSimilar: value }),
       setPrimaryHue: (hue: PrimaryHue) => set({ primaryHue: hue }),
     }),
     {

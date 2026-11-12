@@ -14,6 +14,8 @@ const FORGOTTEN_MIN_PLAYS = 3;
 const LIKE_BONUS = 3;
 /** Each skip cancels out this many plays. */
 const SKIP_PENALTY = 1;
+/** Songs heard this recently are not queued again when the radio keeps playing. */
+const RECENT_REPEAT_MS = 2 * 60 * 60 * 1000;
 
 export type HistoryStats = Record<string, TrackStats>;
 
@@ -259,4 +261,30 @@ export function buildBecauseYouListened(
       .filter((t) => t.id !== seed.id && !isDisliked(taste, t.id))
       .slice(0, limit),
   };
+}
+
+/**
+ * Songs from a radio to append to a queue that is running out: not already
+ * queued, not disliked, and not heard in the last couple of hours.
+ */
+export function pickRadioContinuation(
+  radio: Track[],
+  queue: Track[],
+  taste: Taste,
+  now: number,
+  limit = 20
+): Track[] {
+  const excluded = new Set(queue.map((t) => t.id));
+  const picked: Track[] = [];
+
+  for (const track of radio) {
+    if (picked.length >= limit) break;
+    if (excluded.has(track.id) || isDisliked(taste, track.id)) continue;
+    const stats = taste.stats[track.id];
+    if (stats?.playCount > 0 && now - stats.lastPlayedAt < RECENT_REPEAT_MS) continue;
+    excluded.add(track.id);
+    picked.push(track);
+  }
+
+  return picked;
 }

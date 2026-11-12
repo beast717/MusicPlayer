@@ -9,6 +9,7 @@ import {
   buildMix,
   buildBecauseYouListened,
   createTaste,
+  pickRadioContinuation,
   isDisliked,
   HistoryStats,
   Taste,
@@ -249,5 +250,26 @@ describe('because you listened to', () => {
 
     expect(section.seed).toBe(seed);
     expect(section.tracks.map((t) => t.id)).toEqual(['r1', 'r2']);
+  });
+});
+
+describe('pickRadioContinuation', () => {
+  it('skips queued, disliked and recently heard songs, and respects the limit', () => {
+    const taste = createTaste(
+      historyStats([
+        [track('justHeard'), { plays: 1, daysAgo: 0 }],
+        [track('heardYesterday'), { plays: 1, daysAgo: 1 }],
+        [track('skipped'), { plays: 0, skips: 2 }],
+      ]),
+      [],
+      { blocked: NOW }
+    );
+    const radio = ['queued', 'justHeard', 'blocked', 'skipped', 'heardYesterday', 'new1', 'new1', 'new2', 'new3'].map(
+      (id) => track(id)
+    );
+
+    expect(
+      pickRadioContinuation(radio, [track('queued')], taste, NOW, 3).map((t) => t.id)
+    ).toEqual(['heardYesterday', 'new1', 'new2']);
   });
 });

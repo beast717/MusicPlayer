@@ -9,6 +9,7 @@ A free, open-source music streaming app for iOS built with React Native and Expo
 - **Import Playlists** — Paste a YouTube or YouTube Music playlist or album link (Library → Import, or the search field) and save it as a local playlist
 - **Background Playback** — Keep listening with the screen off or while using other apps
 - **Playback Controls** — Play, pause, skip, seek, shuffle, and repeat (single track or queue)
+- **Endless Radio** — When the queue runs out, similar songs keep playing (YouTube Music's radio, minus songs you skip or marked "Not interested"); can be turned off in Settings
 - **Download Songs** — Save tracks offline as M4A files with progress tracking
 - **Playlists** — Create, rename, and manage custom playlists
 - **Favorites** — Like songs for quick access in your Liked Songs collection

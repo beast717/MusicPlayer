@@ -202,6 +202,9 @@ export async function PlaybackService() {
       store.setCurrentTrack(nextTrack);
       if (nextTrack) retriedTrackIds.delete(nextTrack.id);
 
+      // Running out of songs: line up similar ones well before the end
+      store.continueWithSimilar();
+
       // If the track URL is a placeholder, resolve it now
       const tpQueue = await TrackPlayer.getQueue();
       const activeTP = tpQueue[nextIndex];
@@ -236,11 +239,29 @@ export async function PlaybackService() {
     }
   );
 
+  // Normally the radio extended the queue long before it ended; this catches
+  // a radio that couldn't load earlier (e.g. briefly offline)
+  TrackPlayer.addEventListener(Event.PlaybackQueueEnded, async () => {
+    try {
+      if (await usePlayerStore.getState().continueWithSimilar()) {
+        // The active-track handler resolves the stream and starts playback
+        await TrackPlayer.skipToNext();
+      }
+    } catch (err) {
+      console.warn('Failed to continue after the queue ended:', err);
+    }
+  });
+
   // Resolve several tracks ahead while the app is still awake: in the
-  // background iOS may pause the WebView that resolves streams
+  // background iOS may pause the WebView that resolves streams. Line up
+  // similar songs first so there is something to resolve.
   AppState.addEventListener('change', (state) => {
     if (state === 'inactive' || state === 'background') {
-      getUpcomingTracks(BACKGROUND_PREFETCH_COUNT).then(prefetchStreams, () => {});
+      usePlayerStore
+        .getState()
+        .continueWithSimilar({ minUpcoming: BACKGROUND_PREFETCH_COUNT })
+        .then(() => getUpcomingTracks(BACKGROUND_PREFETCH_COUNT))
+        .then(prefetchStreams, () => {});
     }
   });
 }
