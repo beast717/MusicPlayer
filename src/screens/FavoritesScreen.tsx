@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ArrowLeft, Heart, Shuffle, Play } from 'lucide-react-native';
-import { TrackItem, AddToPlaylistModal } from '../components';
+import { TrackItem, TrackOptionsModal } from '../components';
 import { Track } from '../types';
 import { useTheme } from '../theme';
 import { typography } from '../theme/typography';
@@ -120,8 +120,7 @@ export function FavoritesScreen() {
         showsVerticalScrollIndicator={false}
       />
 
-      {/* Add To Playlist Modal */}
-      <AddToPlaylistModal
+      <TrackOptionsModal
         visible={!!playlistTrack}
         track={playlistTrack}
         onClose={() => setPlaylistTrack(null)}

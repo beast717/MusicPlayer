@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Image,
   Alert,
+  Share,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import Slider from '@react-native-community/slider';
@@ -32,15 +33,17 @@ import { typography } from '../theme/typography';
 import { spacing, borderRadius } from '../theme/spacing';
 import { usePlayerStore, useLibraryStore, useDownloadStore } from '../stores';
 import { useProgress } from 'react-native-track-player';
+import { Track } from '../types';
 
 import { formatDuration, getDisplayDuration, useDebouncedCallback } from '../utils/helpers';
 
 interface PlayerScreenProps {
   onDismiss: () => void;
+  /** Close the player and show the artist of the track. */
+  onOpenArtist: (track: Track) => void;
 }
 
-
-export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
+export function PlayerScreen({ onDismiss, onOpenArtist }: PlayerScreenProps) {
   const { width: SCREEN_WIDTH } = useWindowDimensions();
   const ARTWORK_SIZE = SCREEN_WIDTH - spacing.xxl * 2;
   const { theme, isDark } = useTheme();
@@ -115,6 +118,13 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
       Alert.alert('Download Failed', `"${track.title}"\n\n${message}`);
     }
   }, [currentTrack, isDownloading, isDownloaded, startDownload, cancelDownload]);
+
+  const handleShare = useCallback(() => {
+    if (!currentTrack) return;
+    Share.share({
+      message: `${currentTrack.title} · ${currentTrack.artist}\nhttps://music.youtube.com/watch?v=${currentTrack.id}`,
+    }).catch(() => {});
+  }, [currentTrack]);
 
   const handleSlidingStart = useCallback((value: number) => {
     setScrubStart(value);
@@ -210,15 +220,22 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
             >
               {currentTrack.title}
             </Text>
-            <Text
-              numberOfLines={1}
-              style={[
-                typography.body,
-                { color: theme.textSecondary, marginTop: 2 },
-              ]}
+            <TouchableOpacity
+              onPress={() => onOpenArtist(currentTrack)}
+              disabled={!currentTrack.artist.trim()}
+              accessibilityRole="button"
+              accessibilityLabel={`Go to artist ${currentTrack.artist}`}
             >
-              {currentTrack.artist}
-            </Text>
+              <Text
+                numberOfLines={1}
+                style={[
+                  typography.body,
+                  { color: theme.textSecondary, marginTop: 2 },
+                ]}
+              >
+                {currentTrack.artist}
+              </Text>
+            </TouchableOpacity>
           </View>
           <TouchableOpacity
             onPress={() => toggleFavorite(currentTrack)}
@@ -333,7 +350,12 @@ export function PlayerScreen({ onDismiss }: PlayerScreenProps) {
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity style={styles.bottomAction}>
+        <TouchableOpacity
+          onPress={handleShare}
+          style={styles.bottomAction}
+          accessibilityRole="button"
+          accessibilityLabel="Share"
+        >
           <Share2 size={20} color={theme.textTertiary} />
         </TouchableOpacity>
       </View>

@@ -1,6 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Alert, View, StyleSheet, Modal, StatusBar } from 'react-native';
-import { NavigationContainer, DefaultTheme, DarkTheme } from '@react-navigation/native';
+import {
+  NavigationContainer,
+  DefaultTheme,
+  DarkTheme,
+  StackActions,
+  createNavigationContainerRef,
+} from '@react-navigation/native';
+import NetInfo from '@react-native-community/netinfo';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import {
@@ -16,6 +23,8 @@ import { MiniPlayer } from '../components';
 import {
   HomeScreen,
   MixDetailScreen,
+  ArtistScreen,
+  CollectionScreen,
   SearchScreen,
   PlayerScreen,
   LibraryScreen,
@@ -25,8 +34,11 @@ import {
   SettingsScreen,
 } from '../screens';
 import { usePlayerStore } from '../stores';
+import { describePlaybackError } from '../services/playbackErrors';
+import { primaryArtist } from '../services/recommendations';
 
 import type {
+  Track,
   TabParamList,
   HomeStackParamList,
   SearchStackParamList,
@@ -40,6 +52,8 @@ const SearchStack = createNativeStackNavigator<SearchStackParamList>();
 const LibraryStack = createNativeStackNavigator<LibraryStackParamList>();
 const SettingsStack = createNativeStackNavigator<SettingsStackParamList>();
 
+const navigationRef = createNavigationContainerRef();
+
 // ─── Stack Navigators ──────────────────────────────────────────
 
 function HomeStackNavigator() {
@@ -47,6 +61,8 @@ function HomeStackNavigator() {
     <HomeStack.Navigator screenOptions={{ headerShown: false }}>
       <HomeStack.Screen name="Home" component={HomeScreen} />
       <HomeStack.Screen name="MixDetail" component={MixDetailScreen} />
+      <HomeStack.Screen name="Artist" component={ArtistScreen} />
+      <HomeStack.Screen name="Collection" component={CollectionScreen} />
     </HomeStack.Navigator>
   );
 }
@@ -55,6 +71,8 @@ function SearchStackNavigator() {
   return (
     <SearchStack.Navigator screenOptions={{ headerShown: false }}>
       <SearchStack.Screen name="Search" component={SearchScreen} />
+      <SearchStack.Screen name="Artist" component={ArtistScreen} />
+      <SearchStack.Screen name="Collection" component={CollectionScreen} />
     </SearchStack.Navigator>
   );
 }
@@ -66,6 +84,8 @@ function LibraryStackNavigator() {
       <LibraryStack.Screen name="PlaylistDetail" component={PlaylistDetailScreen} />
       <LibraryStack.Screen name="Downloads" component={DownloadsScreen} />
       <LibraryStack.Screen name="Favorites" component={FavoritesScreen} />
+      <LibraryStack.Screen name="Artist" component={ArtistScreen} />
+      <LibraryStack.Screen name="Collection" component={CollectionScreen} />
     </LibraryStack.Navigator>
   );
 }
@@ -74,6 +94,8 @@ function SettingsStackNavigator() {
   return (
     <SettingsStack.Navigator screenOptions={{ headerShown: false }}>
       <SettingsStack.Screen name="Settings" component={SettingsScreen} />
+      <SettingsStack.Screen name="Artist" component={ArtistScreen} />
+      <SettingsStack.Screen name="Collection" component={CollectionScreen} />
     </SettingsStack.Navigator>
   );
 }
@@ -94,16 +116,39 @@ export function Navigation() {
     }
 
     shownErrorRef.current = playerError;
-    Alert.alert('Playback Error', playerError, [
-      {
-        text: 'OK',
-        onPress: () => {
-          shownErrorRef.current = null;
-          clearPlayerError(null);
-        },
-      },
-    ]);
+    const dismiss = () => {
+      shownErrorRef.current = null;
+      clearPlayerError(null);
+    };
+
+    // Being offline explains a failure better than the stream diagnostics do
+    NetInfo.fetch()
+      .then((state) => state.isConnected, () => null)
+      .then((isOnline) => {
+        const info = describePlaybackError(playerError, isOnline);
+        Alert.alert(info.title, info.message, [
+          {
+            text: 'Details',
+            onPress: () =>
+              Alert.alert('Technical Details', info.details, [{ text: 'OK', onPress: dismiss }]),
+          },
+          { text: 'OK', onPress: dismiss },
+        ]);
+      });
   }, [clearPlayerError, playerError]);
+
+  // The player is a modal outside the navigators: close it, then open the
+  // artist on top of whichever tab is showing (every tab's stack has the screen)
+  const handleOpenArtist = (track: Track) => {
+    setPlayerVisible(false);
+    if (!navigationRef.isReady()) return;
+    navigationRef.dispatch(
+      StackActions.push('Artist', {
+        artistId: track.artistId,
+        name: primaryArtist(track.artist) || track.artist,
+      })
+    );
+  };
 
   const navigationTheme = isDark
     ? {
@@ -130,7 +175,7 @@ export function Navigation() {
       };
 
   return (
-    <NavigationContainer theme={navigationTheme}>
+    <NavigationContainer ref={navigationRef} theme={navigationTheme}>
       <StatusBar
         barStyle={isDark ? 'light-content' : 'dark-content'}
         backgroundColor={theme.background}
@@ -212,7 +257,10 @@ export function Navigation() {
         onRequestClose={() => setPlayerVisible(false)}
         onDismiss={() => setPlayerVisible(false)}
       >
-        <PlayerScreen onDismiss={() => setPlayerVisible(false)} />
+        <PlayerScreen
+          onDismiss={() => setPlayerVisible(false)}
+          onOpenArtist={handleOpenArtist}
+        />
       </Modal>
     </NavigationContainer>
   );

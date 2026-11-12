@@ -2,12 +2,11 @@ import { Track } from '../types';
 import { REQUEST_TIMEOUT } from '../utils/constants';
 import { mmkvStorage } from './storage';
 
-// ─── YouTube Music radio ("songs like this one") ────────────────────
-// The `next` endpoint with an RDAMVM playlist returns the automix YouTube
-// Music builds for a song. It needs no login, so recommendations are driven
-// by the local listening history choosing which songs to ask about.
+// ─── YouTube Music client ───────────────────────────────────────────
+// The web client's API needs no login. Used for radios (here) and for
+// search, artists, albums and playlists (musicCatalog.ts).
 
-const YTM_NEXT_URL = 'https://music.youtube.com/youtubei/v1/next?prettyPrint=false';
+const YTM_API_URL = 'https://music.youtube.com/youtubei/v1';
 
 const YTM_CONTEXT = {
   client: {
@@ -26,16 +25,60 @@ interface CachedRadio {
   timestamp: number;
 }
 
-function parseDuration(text: string | undefined): number {
+/** POST to a YouTube Music endpoint (`next`, `search`, `browse`, …) and return the JSON. */
+export async function ytmRequest(
+  endpoint: string,
+  body: Record<string, unknown>
+): Promise<any> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+  try {
+    const response = await fetch(`${YTM_API_URL}/${endpoint}?prettyPrint=false`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Origin: 'https://music.youtube.com',
+      },
+      body: JSON.stringify({ context: YTM_CONTEXT, ...body }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      throw new Error(`YouTube Music returned ${response.status}`);
+    }
+    return await response.json();
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** "4:42" → 282 */
+export function parseDuration(text: string | undefined): number {
   if (!text) return 0;
   const parts = text.split(':').map(Number);
   if (parts.some(isNaN)) return 0;
   return parts.reduce((total, part) => total * 60 + part, 0);
 }
 
-function joinRuns(runs: { text: string }[] | undefined): string {
+export function joinRuns(runs: { text: string }[] | undefined): string {
   return (runs || []).map((r) => r.text).join('');
 }
+
+/** The channel ID of the first artist linked in a byline. */
+export function findArtistId(runs: any[] | undefined): string | undefined {
+  for (const run of runs || []) {
+    const browse = run?.navigationEndpoint?.browseEndpoint;
+    const pageType =
+      browse?.browseEndpointContextSupportedConfigs?.browseEndpointContextMusicConfig
+        ?.pageType;
+    if (browse?.browseId && pageType === 'MUSIC_PAGE_TYPE_ARTIST') return browse.browseId;
+  }
+  return undefined;
+}
+
+// ─── Radio ("songs like this one") ──────────────────────────────────
+// The `next` endpoint with an RDAMVM playlist returns the automix YouTube
+// Music builds for a song, so recommendations are driven by the local
+// listening history choosing which songs to ask about.
 
 /** Extract the tracks of a radio from a `next` response. Unknown shapes yield []. */
 export function parseRadioResponse(data: any): Track[] {
@@ -56,6 +99,7 @@ export function parseRadioResponse(data: any): Track[] {
     seen.add(id);
 
     const thumbnails = video.thumbnail?.thumbnails;
+    const artistId = findArtistId(video.longBylineText?.runs);
     tracks.push({
       id,
       title,
@@ -64,6 +108,7 @@ export function parseRadioResponse(data: any): Track[] {
       thumbnailUrl:
         thumbnails?.[thumbnails.length - 1]?.url ||
         `https://i.ytimg.com/vi/${id}/mqdefault.jpg`,
+      ...(artistId ? { artistId } : {}),
     });
   }
 
@@ -73,35 +118,17 @@ export function parseRadioResponse(data: any): Track[] {
 const inFlight = new Map<string, Promise<Track[]>>();
 
 async function fetchRadio(videoId: string): Promise<Track[]> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
-  try {
-    const response = await fetch(YTM_NEXT_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Origin: 'https://music.youtube.com',
-      },
-      body: JSON.stringify({
-        context: YTM_CONTEXT,
-        videoId,
-        playlistId: `RDAMVM${videoId}`,
-        isAudioOnly: true,
-      }),
-      signal: controller.signal,
-    });
-    if (!response.ok) {
-      throw new Error(`YouTube Music radio returned ${response.status}`);
-    }
+  const data = await ytmRequest('next', {
+    videoId,
+    playlistId: `RDAMVM${videoId}`,
+    isAudioOnly: true,
+  });
 
-    const tracks = parseRadioResponse(await response.json());
-    if (tracks.length === 0) {
-      throw new Error('YouTube Music radio returned no tracks');
-    }
-    return tracks;
-  } finally {
-    clearTimeout(timer);
+  const tracks = parseRadioResponse(data);
+  if (tracks.length === 0) {
+    throw new Error('YouTube Music radio returned no tracks');
   }
+  return tracks;
 }
 
 /**

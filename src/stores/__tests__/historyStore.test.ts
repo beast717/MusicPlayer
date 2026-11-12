@@ -62,3 +62,21 @@ it('evicts the least recently played tracks when full', () => {
   expect(ids).toContain('t5');
   expect(ids).toContain(`t${MAX_HISTORY_TRACKS + 4}`);
 });
+
+it('keeps the artist link of a track', () => {
+  state().recordPlay({ ...track('a'), artistId: 'UCartist' });
+
+  expect(state().stats.a.track.artistId).toBe('UCartist');
+});
+
+it('remembers "not interested" marks until they are undone or history is cleared', () => {
+  state().markNotInterested('a', 1000);
+  state().markNotInterested('b', 2000);
+  expect(state().notInterested).toEqual({ a: 1000, b: 2000 });
+
+  state().undoNotInterested('a');
+  expect(state().notInterested).toEqual({ b: 2000 });
+
+  state().clearHistory();
+  expect(state().notInterested).toEqual({});
+});

@@ -10,26 +10,33 @@ interface MediaCardProps {
   title: string;
   subtitle?: string;
   onPress: () => void;
+  onLongPress?: () => void;
   size?: number;
   /** Highlight the title (e.g. the track that is playing). */
   active?: boolean;
+  /** Circular artwork with centred text, used for artists. */
+  round?: boolean;
 }
 
-/** Square artwork with a title and subtitle, for horizontal rows of tracks or mixes. */
+/** Square artwork with a title and subtitle, for horizontal rows of tracks, albums or mixes. */
 const MediaCardInner = ({
   imageUrl,
   title,
   subtitle,
   onPress,
+  onLongPress,
   size = 140,
   active,
+  round,
 }: MediaCardProps) => {
   const { theme } = useTheme();
+  const textAlign = round ? 'center' : 'left';
 
   return (
     <TouchableOpacity
       style={[styles.container, { width: size }]}
       onPress={onPress}
+      onLongPress={onLongPress}
       activeOpacity={0.7}
       accessibilityRole="button"
       accessibilityLabel={subtitle ? `${title}, ${subtitle}` : title}
@@ -38,6 +45,7 @@ const MediaCardInner = ({
         style={[
           styles.imageContainer,
           { width: size, height: size, backgroundColor: theme.card },
+          round && { borderRadius: size / 2 },
         ]}
       >
         {imageUrl ? (
@@ -54,6 +62,7 @@ const MediaCardInner = ({
             color: active ? theme.primary : theme.text,
             fontWeight: active ? '600' : '500',
             marginTop: spacing.sm,
+            textAlign,
           },
         ]}
       >
@@ -62,7 +71,7 @@ const MediaCardInner = ({
       {!!subtitle && (
         <Text
           numberOfLines={1}
-          style={[typography.caption2, { color: theme.textSecondary }]}
+          style={[typography.caption2, { color: theme.textSecondary, textAlign }]}
         >
           {subtitle}
         </Text>

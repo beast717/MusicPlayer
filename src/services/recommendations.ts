@@ -1,16 +1,43 @@
 import { Track } from '../types';
 import type { TrackStats } from '../stores/historyStore';
 
-// Pure functions that turn the listening history (plus radios fetched for a
-// few "seed" songs) into the home screen sections.
+// Pure functions that turn the user's taste (listening history, liked songs
+// and "not interested" marks) plus radios fetched for a few "seed" songs into
+// the home screen sections.
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 /** A play counts half as much after this many days. */
 const SCORE_HALF_LIFE_DAYS = 30;
 const FORGOTTEN_AFTER_DAYS = 21;
 const FORGOTTEN_MIN_PLAYS = 3;
+/** Liking a song counts like this many extra plays. */
+const LIKE_BONUS = 3;
+/** Each skip cancels out this many plays. */
+const SKIP_PENALTY = 1;
 
 export type HistoryStats = Record<string, TrackStats>;
+
+/** Everything known about what the user does and doesn't want to hear. */
+export interface Taste {
+  stats: HistoryStats;
+  favorites: Track[];
+  favoriteIds: Set<string>;
+  /** Tracks marked "not interested": never recommended. */
+  blockedIds: Set<string>;
+}
+
+export function createTaste(
+  stats: HistoryStats,
+  favorites: Track[] = [],
+  notInterested: Record<string, number> = {}
+): Taste {
+  return {
+    stats,
+    favorites,
+    favoriteIds: new Set(favorites.map((t) => t.id)),
+    blockedIds: new Set(Object.keys(notInterested)),
+  };
+}
 
 export interface Mix {
   id: string;
@@ -38,38 +65,80 @@ function artistKey(track: Track): string {
   return primaryArtist(track.artist).toLowerCase() || `track:${track.id}`;
 }
 
-/** Higher = listened to more, and more recently. Skips pull the score down. */
-export function scoreTrack(stats: TrackStats, now: number): number {
+/**
+ * Higher = listened to more, and more recently. A like pushes the score up,
+ * skips pull it down.
+ */
+export function scoreTrack(stats: TrackStats, now: number, isFavorite = false): number {
   const ageDays = Math.max(0, now - stats.lastPlayedAt) / DAY_MS;
   const decay = Math.pow(0.5, ageDays / SCORE_HALF_LIFE_DAYS);
-  return (stats.playCount - 0.5 * stats.skipCount) * decay;
+  const likes = isFavorite ? LIKE_BONUS : 0;
+  return (stats.playCount + likes - SKIP_PENALTY * stats.skipCount) * decay;
 }
 
-/** The user keeps skipping this track, so don't recommend it. */
-function isDisliked(stats: TrackStats | undefined): boolean {
+/**
+ * Don't recommend this track: it was marked "not interested", or the user
+ * keeps skipping it. A like outweighs skips.
+ */
+export function isDisliked(taste: Taste, trackId: string): boolean {
+  if (taste.blockedIds.has(trackId)) return true;
+  if (taste.favoriteIds.has(trackId)) return false;
+  const stats = taste.stats[trackId];
   return !!stats && stats.skipCount >= 2 && stats.skipCount > stats.playCount;
 }
 
-function rankedByScore(stats: HistoryStats, now: number): TrackStats[] {
-  return Object.values(stats)
-    .filter((s) => s.playCount > 0 && scoreTrack(s, now) > 0)
-    .sort((a, b) => scoreTrack(b, now) - scoreTrack(a, now));
+interface ScoredTrack {
+  track: Track;
+  score: number;
 }
 
-export function getListenAgain(stats: HistoryStats, now: number, limit = 12): Track[] {
-  return rankedByScore(stats, now)
+/** Played tracks, best first. */
+function rankedByScore(taste: Taste, now: number): ScoredTrack[] {
+  return Object.values(taste.stats)
+    .filter((s) => s.playCount > 0 && !taste.blockedIds.has(s.track.id))
+    .map((s) => ({
+      track: s.track,
+      score: scoreTrack(s, now, taste.favoriteIds.has(s.track.id)),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+}
+
+/** Liked songs that haven't been played yet still say what the user is into. */
+function unplayedFavorites(taste: Taste, now: number): ScoredTrack[] {
+  return taste.favorites
+    .filter((t) => !!t.addedAt && !(taste.stats[t.id]?.playCount > 0))
+    .map((track) => ({
+      track,
+      score: scoreTrack(
+        {
+          track,
+          playCount: 0,
+          skipCount: taste.stats[track.id]?.skipCount ?? 0,
+          firstPlayedAt: track.addedAt as number,
+          lastPlayedAt: track.addedAt as number,
+        },
+        now,
+        true
+      ),
+    }))
+    .filter((entry) => entry.score > 0);
+}
+
+export function getListenAgain(taste: Taste, now: number, limit = 12): Track[] {
+  return rankedByScore(taste, now)
     .slice(0, limit)
-    .map((s) => s.track);
+    .map((entry) => entry.track);
 }
 
 /** Songs that were played a lot but not for a while. */
-export function getForgottenFavorites(stats: HistoryStats, now: number, limit = 12): Track[] {
-  return Object.values(stats)
+export function getForgottenFavorites(taste: Taste, now: number, limit = 12): Track[] {
+  return Object.values(taste.stats)
     .filter(
       (s) =>
         s.playCount >= FORGOTTEN_MIN_PLAYS &&
         now - s.lastPlayedAt >= FORGOTTEN_AFTER_DAYS * DAY_MS &&
-        !isDisliked(s)
+        !isDisliked(taste, s.track.id)
     )
     .sort((a, b) => b.playCount - a.playCount)
     .slice(0, limit)
@@ -77,12 +146,12 @@ export function getForgottenFavorites(stats: HistoryStats, now: number, limit = 
 }
 
 /**
- * Songs to base recommendations on: the top-scored tracks, one per artist so
- * the sections don't all revolve around the same artist. Falls back to
- * favourites / recently played while the history is still thin.
+ * Songs to base recommendations on: the top-scored played and liked tracks,
+ * one per artist so the sections don't all revolve around the same artist.
+ * Falls back to older favourites / recently played while the history is thin.
  */
 export function pickSeeds(
-  stats: HistoryStats,
+  taste: Taste,
   fallbackTracks: Track[],
   now: number,
   count: number
@@ -91,11 +160,14 @@ export function pickSeeds(
   const usedIds = new Set<string>();
   const usedArtists = new Set<string>();
 
-  const candidates = [...rankedByScore(stats, now).map((s) => s.track), ...fallbackTracks];
+  const ranked = [...rankedByScore(taste, now), ...unplayedFavorites(taste, now)].sort(
+    (a, b) => b.score - a.score
+  );
+  const candidates = [...ranked.map((entry) => entry.track), ...fallbackTracks];
   for (const track of candidates) {
     if (seeds.length >= count) break;
     const artist = artistKey(track);
-    if (usedIds.has(track.id) || usedArtists.has(artist) || isDisliked(stats[track.id])) {
+    if (usedIds.has(track.id) || usedArtists.has(artist) || isDisliked(taste, track.id)) {
       continue;
     }
     usedIds.add(track.id);
@@ -110,7 +182,7 @@ export function pickSeeds(
 export function buildQuickPicks(
   seeds: Track[],
   radios: Track[][],
-  stats: HistoryStats,
+  taste: Taste,
   limit = 20
 ): Track[] {
   const seedIds = new Set(seeds.map((s) => s.id));
@@ -121,7 +193,7 @@ export function buildQuickPicks(
   for (let i = 0; i < longest && picked.length < limit; i++) {
     for (const radio of radios) {
       const track = radio[i];
-      if (!track || seen.has(track.id) || seedIds.has(track.id) || isDisliked(stats[track.id])) {
+      if (!track || seen.has(track.id) || seedIds.has(track.id) || isDisliked(taste, track.id)) {
         continue;
       }
       seen.add(track.id);
@@ -133,10 +205,10 @@ export function buildQuickPicks(
   return picked;
 }
 
-export function buildMix(seed: Track, radio: Track[], stats: HistoryStats, limit = 30): Mix {
+export function buildMix(seed: Track, radio: Track[], taste: Taste, limit = 30): Mix {
   const tracks = [
     seed,
-    ...radio.filter((t) => t.id !== seed.id && !isDisliked(stats[t.id])),
+    ...radio.filter((t) => t.id !== seed.id && !isDisliked(taste, t.id)),
   ].slice(0, limit);
 
   const artists: string[] = [];
@@ -158,14 +230,15 @@ export function buildMix(seed: Track, radio: Track[], stats: HistoryStats, limit
 }
 
 /** The most recently played song that isn't already covered by a mix. */
-export function pickRecentSeed(stats: HistoryStats, excluded: Track[]): Track | null {
+export function pickRecentSeed(taste: Taste, excluded: Track[]): Track | null {
   const excludedIds = new Set(excluded.map((t) => t.id));
   const excludedArtists = new Set(excluded.map(artistKey));
 
-  const recent = Object.values(stats)
+  const recent = Object.values(taste.stats)
     .filter(
       (s) =>
         s.playCount > 0 &&
+        !isDisliked(taste, s.track.id) &&
         !excludedIds.has(s.track.id) &&
         !excludedArtists.has(artistKey(s.track))
     )
@@ -177,13 +250,13 @@ export function pickRecentSeed(stats: HistoryStats, excluded: Track[]): Track | 
 export function buildBecauseYouListened(
   seed: Track,
   radio: Track[],
-  stats: HistoryStats,
+  taste: Taste,
   limit = 15
 ): BecauseYouListened {
   return {
     seed,
     tracks: radio
-      .filter((t) => t.id !== seed.id && !isDisliked(stats[t.id]))
+      .filter((t) => t.id !== seed.id && !isDisliked(taste, t.id))
       .slice(0, limit),
   };
 }

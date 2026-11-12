@@ -16,6 +16,8 @@ export const MAX_HISTORY_TRACKS = 1000;
 
 interface HistoryState {
   stats: Record<string, TrackStats>;
+  /** Tracks the user never wants recommended: track ID → when it was marked. */
+  notInterested: Record<string, number>;
 }
 
 interface HistoryActions {
@@ -23,6 +25,9 @@ interface HistoryActions {
   recordPlay: (track: Track, at?: number) => void;
   /** The track was abandoned shortly after it started. */
   recordSkip: (track: Track, at?: number) => void;
+  markNotInterested: (trackId: string, at?: number) => void;
+  undoNotInterested: (trackId: string) => void;
+  /** Forget everything recommendations are based on. */
   clearHistory: () => void;
 }
 
@@ -37,6 +42,7 @@ function toHistoryTrack(track: Track): Track {
     artist: track.artist,
     duration: track.duration,
     thumbnailUrl: track.thumbnailUrl,
+    ...(track.artistId ? { artistId: track.artistId } : {}),
   };
 }
 
@@ -53,6 +59,7 @@ export const useHistoryStore = create<HistoryStore>()(
   persist(
     (set) => ({
       stats: {},
+      notInterested: {},
 
       recordPlay: (track, at = Date.now()) => {
         set((state) => {
@@ -91,7 +98,18 @@ export const useHistoryStore = create<HistoryStore>()(
         });
       },
 
-      clearHistory: () => set({ stats: {} }),
+      markNotInterested: (trackId, at = Date.now()) => {
+        set((state) => ({ notInterested: { ...state.notInterested, [trackId]: at } }));
+      },
+
+      undoNotInterested: (trackId) => {
+        set((state) => {
+          const { [trackId]: _, ...rest } = state.notInterested;
+          return { notInterested: rest };
+        });
+      },
+
+      clearHistory: () => set({ stats: {}, notInterested: {} }),
     }),
     {
       name: 'history-store',

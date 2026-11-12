@@ -658,31 +658,3 @@ export function pickBestAudioStream(
   // Last resort: webm/opus or any remaining format
   return pickByQuality(directStreams, quality);
 }
-
-// ─── Video Details ──────────────────────────────────────────────────
-
-export async function getVideoDetails(videoId: string): Promise<{
-  title: string;
-  uploader: string;
-  thumbnailUrl: string;
-  duration: number;
-} | null> {
-  try {
-    const response = await fetchWithTimeout(
-      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`
-    );
-    if (!response.ok) return null;
-
-    const data = await response.json();
-    return {
-      title: data.title || '',
-      uploader: data.author_name || '',
-      thumbnailUrl:
-        data.thumbnail_url ||
-        `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
-      duration: 0,
-    };
-  } catch {
-    return null;
-  }
-}

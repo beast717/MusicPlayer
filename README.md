@@ -4,7 +4,9 @@ A free, open-source music streaming app for iOS built with React Native and Expo
 
 ## Features
 
-- **Search & Stream** — Search for any song or artist and stream audio directly from YouTube, including protected label music
+- **Search & Stream** — Search YouTube Music for songs, albums, artists and playlists (or all of YouTube for videos), with suggestions as you type, and stream audio directly, including protected label music
+- **Artist & Album Pages** — Top songs, albums, singles and similar artists; open an artist from any song's menu or from the player
+- **Import Playlists** — Paste a YouTube or YouTube Music playlist or album link (Library → Import, or the search field) and save it as a local playlist
 - **Background Playback** — Keep listening with the screen off or while using other apps
 - **Playback Controls** — Play, pause, skip, seek, shuffle, and repeat (single track or queue)
 - **Download Songs** — Save tracks offline as M4A files with progress tracking
@@ -13,11 +15,12 @@ A free, open-source music streaming app for iOS built with React Native and Expo
 - **Library** — Browse your playlists, favorites, and downloads all in one place
 - **Download Quality** — Choose Low (smallest files), Medium (~128 kbps) or High (best available) for downloaded songs
 - **Wi-Fi-only Downloads** — Optionally block downloads on cellular data
+- **Auto-download Liked Songs** — Optionally download every song you like, respecting the Wi-Fi-only setting
 - **Mini Player** — Persistent mini player at the bottom for quick controls while browsing
 - **Dark Theme** — Clean, dark UI designed for comfortable use
 - **Search History** — Remembers recent searches for quick access
 - **Recently Played** — See your listening history on the home screen
-- **Personalised Home** — Quick Picks, Mixes for You, Listen Again and "Because you listened to…" built from your listening history (kept on the device) and YouTube Music's song radios
+- **Personalised Home** — Quick Picks, Mixes for You, Listen Again and "Because you listened to…" built from your listening history (kept on the device) and YouTube Music's song radios. Likes count extra, skipped songs fade out, and "Not interested" in a song's menu removes it from recommendations for good
 
 ## Tech Stack
 

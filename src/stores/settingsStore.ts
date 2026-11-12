@@ -7,12 +7,15 @@ import { PrimaryHue } from '../theme/colors';
 interface SettingsState {
   audioQuality: AudioQuality;
   downloadOverWifiOnly: boolean;
+  /** Download every liked song automatically. */
+  autoDownloadFavorites: boolean;
   primaryHue: PrimaryHue;
 }
 
 interface SettingsActions {
   setAudioQuality: (quality: AudioQuality) => void;
   setDownloadOverWifiOnly: (value: boolean) => void;
+  setAutoDownloadFavorites: (value: boolean) => void;
   setPrimaryHue: (hue: PrimaryHue) => void;
 }
 
@@ -23,10 +26,12 @@ export const useSettingsStore = create<SettingsStore>()(
     (set) => ({
       audioQuality: 'high' as AudioQuality,
       downloadOverWifiOnly: true,
+      autoDownloadFavorites: false,
       primaryHue: 'navy' as PrimaryHue,
 
       setAudioQuality: (quality: AudioQuality) => set({ audioQuality: quality }),
       setDownloadOverWifiOnly: (value: boolean) => set({ downloadOverWifiOnly: value }),
+      setAutoDownloadFavorites: (value: boolean) => set({ autoDownloadFavorites: value }),
       setPrimaryHue: (hue: PrimaryHue) => set({ primaryHue: hue }),
     }),
     {

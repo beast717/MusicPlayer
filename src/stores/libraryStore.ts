@@ -14,6 +14,8 @@ interface LibraryState {
 interface LibraryActions {
   // Playlists
   createPlaylist: (name: string) => Playlist;
+  /** Create a playlist that already has tracks (saved mix, album or imported playlist). */
+  importPlaylist: (name: string, tracks: Track[], coverUrl?: string) => Playlist;
   deletePlaylist: (id: string) => void;
   renamePlaylist: (id: string, name: string) => void;
   addToPlaylist: (playlistId: string, track: Track) => void;
@@ -48,6 +50,22 @@ export const useLibraryStore = create<LibraryStore>()(
           id: generateId(),
           name,
           tracks: [],
+          createdAt: now,
+          updatedAt: now,
+        };
+        set((state) => ({ playlists: [...state.playlists, playlist] }));
+        return playlist;
+      },
+
+      importPlaylist: (name: string, tracks: Track[], coverUrl?: string) => {
+        const now = Date.now();
+        const seen = new Set<string>();
+        const unique = tracks.filter((t) => !seen.has(t.id) && !!seen.add(t.id));
+        const playlist: Playlist = {
+          id: generateId(),
+          name,
+          tracks: unique,
+          coverUrl: coverUrl || unique[0]?.thumbnailUrl,
           createdAt: now,
           updatedAt: now,
         };
@@ -121,7 +139,8 @@ export const useLibraryStore = create<LibraryStore>()(
           return {
             favorites: exists
               ? state.favorites.filter((t) => t.id !== track.id)
-              : [track, ...state.favorites],
+              : // When it was liked lets recommendations weigh recent likes higher
+                [{ ...track, addedAt: Date.now() }, ...state.favorites],
           };
         });
       },

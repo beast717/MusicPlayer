@@ -17,7 +17,7 @@ import {
   Heart,
   TrendingUp,
 } from 'lucide-react-native';
-import { TrackItem, PlaylistCard, MediaCard } from '../components';
+import { TrackItem, PlaylistCard, MediaCard, TrackOptionsModal } from '../components';
 import { useTheme } from '../theme';
 import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
@@ -31,6 +31,7 @@ import {
   getListenAgain,
   getForgottenFavorites,
   primaryArtist,
+  createTaste,
 } from '../services/recommendations';
 import { Track } from '../types';
 import { useFocusEffect, useNavigation } from '@react-navigation/native';
@@ -51,6 +52,8 @@ interface TrackRowSectionProps {
   tracks: Track[];
   currentTrackId?: string;
   onPressTrack: (tracks: Track[], index: number) => void;
+  /** Long-press on a card. */
+  onTrackOptions: (track: Track) => void;
 }
 
 /** A titled, horizontally scrolling row of track cards. */
@@ -60,6 +63,7 @@ function TrackRowSection({
   tracks,
   currentTrackId,
   onPressTrack,
+  onTrackOptions,
 }: TrackRowSectionProps) {
   const { theme } = useTheme();
 
@@ -91,6 +95,7 @@ function TrackRowSection({
             subtitle={item.artist}
             active={currentTrackId === item.id}
             onPress={() => onPressTrack(tracks, index)}
+            onLongPress={() => onTrackOptions(item)}
           />
         )}
         showsHorizontalScrollIndicator={false}
@@ -111,6 +116,7 @@ export function HomeScreen() {
   const favorites = useLibraryStore((s) => s.favorites);
   const playlists = useLibraryStore((s) => s.playlists);
   const historyStats = useHistoryStore((s) => s.stats);
+  const notInterested = useHistoryStore((s) => s.notInterested);
   const quickPicks = useHomeStore((s) => s.quickPicks);
   const mixes = useHomeStore((s) => s.mixes);
   const becauseYouListened = useHomeStore((s) => s.becauseYouListened);
@@ -119,6 +125,7 @@ export function HomeScreen() {
   const refreshIfStale = useHomeStore((s) => s.refreshIfStale);
 
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [optionsTrack, setOptionsTrack] = useState<Track | null>(null);
 
   const greeting = getGreeting();
 
@@ -145,13 +152,14 @@ export function HomeScreen() {
     [playQueue]
   );
 
-  const listenAgain = useMemo(
-    () => getListenAgain(historyStats, Date.now()),
-    [historyStats]
+  const taste = useMemo(
+    () => createTaste(historyStats, favorites, notInterested),
+    [historyStats, favorites, notInterested]
   );
+  const listenAgain = useMemo(() => getListenAgain(taste, Date.now()), [taste]);
   const forgottenFavorites = useMemo(
-    () => getForgottenFavorites(historyStats, Date.now()),
-    [historyStats]
+    () => getForgottenFavorites(taste, Date.now()),
+    [taste]
   );
   const quickPickColumns = useMemo(
     () => chunk(quickPicks, QUICK_PICK_ROWS),
@@ -300,6 +308,7 @@ export function HomeScreen() {
                           columnIndex * QUICK_PICK_ROWS + rowIndex
                         )
                       }
+                      onMorePress={() => setOptionsTrack(track)}
                       isPlaying={currentTrack?.id === track.id}
                       compact
                     />
@@ -347,6 +356,7 @@ export function HomeScreen() {
             tracks={listenAgain}
             currentTrackId={currentTrack?.id}
             onPressTrack={handlePlayFrom}
+            onTrackOptions={setOptionsTrack}
           />
         )}
 
@@ -360,6 +370,7 @@ export function HomeScreen() {
             tracks={becauseYouListened.tracks}
             currentTrackId={currentTrack?.id}
             onPressTrack={handlePlayFrom}
+            onTrackOptions={setOptionsTrack}
           />
         )}
 
@@ -370,6 +381,7 @@ export function HomeScreen() {
             tracks={recentlyPlayed.slice(0, 10)}
             currentTrackId={currentTrack?.id}
             onPressTrack={handlePlayFrom}
+            onTrackOptions={setOptionsTrack}
           />
         )}
 
@@ -415,6 +427,7 @@ export function HomeScreen() {
             tracks={forgottenFavorites}
             currentTrackId={currentTrack?.id}
             onPressTrack={handlePlayFrom}
+            onTrackOptions={setOptionsTrack}
           />
         )}
 
@@ -442,6 +455,7 @@ export function HomeScreen() {
                 index={index}
                 showIndex
                 onPress={() => playQueue(favorites, index)}
+                onMorePress={() => setOptionsTrack(track)}
                 isPlaying={currentTrack?.id === track.id}
                 compact
               />
@@ -488,6 +502,12 @@ export function HomeScreen() {
           </View>
         )}
       </ScrollView>
+
+      <TrackOptionsModal
+        visible={!!optionsTrack}
+        track={optionsTrack}
+        onClose={() => setOptionsTrack(null)}
+      />
     </SafeAreaView>
   );
 }

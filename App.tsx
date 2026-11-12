@@ -9,12 +9,14 @@ import { ErrorBoundary } from './src/components';
 import { StreamExtractorWebView } from './src/services/StreamExtractorWebView';
 import { pruneStreamCache } from './src/services/youtube';
 import { pruneRadioCache } from './src/services/youtubeMusic';
+import { startAutoDownload } from './src/services/autoDownload';
 
 export default function App() {
   useEffect(() => {
     setupTrackPlayer();
     pruneStreamCache();
     pruneRadioCache();
+    return startAutoDownload();
   }, []);
 
   return (

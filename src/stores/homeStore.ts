@@ -9,6 +9,7 @@ import {
   buildQuickPicks,
   buildMix,
   buildBecauseYouListened,
+  createTaste,
 } from '../services/recommendations';
 import { useHistoryStore } from './historyStore';
 import { useLibraryStore } from './libraryStore';
@@ -33,6 +34,8 @@ interface HomeActions {
   refresh: (options?: { force?: boolean }) => Promise<void>;
   refreshIfStale: () => Promise<void>;
   getMix: (id: string) => Mix | undefined;
+  /** Take a track out of everything on screen (it was marked "not interested"). */
+  removeTrack: (trackId: string) => void;
 }
 
 type HomeStore = HomeState & HomeActions;
@@ -51,13 +54,12 @@ export const useHomeStore = create<HomeStore>()((set, get) => ({
   refresh: async ({ force = false } = {}) => {
     const myRefresh = ++_refreshCounter;
     const now = Date.now();
-    const stats = useHistoryStore.getState().stats;
-    const fallback = [
-      ...usePlayerStore.getState().recentlyPlayed,
-      ...useLibraryStore.getState().favorites,
-    ];
+    const { stats, notInterested } = useHistoryStore.getState();
+    const favorites = useLibraryStore.getState().favorites;
+    const taste = createTaste(stats, favorites, notInterested);
+    const fallback = [...usePlayerStore.getState().recentlyPlayed, ...favorites];
 
-    const seeds = pickSeeds(stats, fallback, now, MAX_SEEDS);
+    const seeds = pickSeeds(taste, fallback, now, MAX_SEEDS);
     if (seeds.length === 0) {
       // Nothing listened to yet: there is nothing to recommend from
       set({
@@ -72,7 +74,7 @@ export const useHomeStore = create<HomeStore>()((set, get) => ({
       return;
     }
 
-    const recentSeed = pickRecentSeed(stats, seeds);
+    const recentSeed = pickRecentSeed(taste, seeds);
     set({ isLoading: true });
 
     // A radio that fails to load just leaves its section out
@@ -99,12 +101,12 @@ export const useHomeStore = create<HomeStore>()((set, get) => ({
       quickPicks: buildQuickPicks(
         quickPickSources.map((e) => e.seed),
         quickPickSources.map((e) => e.radio),
-        stats
+        taste
       ),
-      mixes: loaded.map((e) => buildMix(e.seed, e.radio, stats)),
+      mixes: loaded.map((e) => buildMix(e.seed, e.radio, taste)),
       becauseYouListened:
         recentSeed && recentRadio
-          ? buildBecauseYouListened(recentSeed, recentRadio, stats)
+          ? buildBecauseYouListened(recentSeed, recentRadio, taste)
           : null,
       isLoading: false,
       loadFailed: false,
@@ -121,4 +123,22 @@ export const useHomeStore = create<HomeStore>()((set, get) => ({
   },
 
   getMix: (id) => get().mixes.find((m) => m.id === id),
+
+  removeTrack: (trackId) => {
+    const keep = (t: Track) => t.id !== trackId;
+    set((state) => ({
+      quickPicks: state.quickPicks.filter(keep),
+      mixes: state.mixes
+        // A mix is built around its first track; without it the mix is gone
+        .filter((mix) => mix.tracks[0]?.id !== trackId)
+        .map((mix) => ({ ...mix, tracks: mix.tracks.filter(keep) })),
+      becauseYouListened:
+        state.becauseYouListened && state.becauseYouListened.seed.id !== trackId
+          ? {
+              ...state.becauseYouListened,
+              tracks: state.becauseYouListened.tracks.filter(keep),
+            }
+          : null,
+    }));
+  },
 }));

@@ -11,10 +11,13 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import * as Updates from 'expo-updates';
+import * as FileSystem from 'expo-file-system/legacy';
 import {
   Volume2,
   Wifi,
   HardDrive,
+  Smartphone,
+  Heart,
   Trash2,
   Info,
   ChevronRight,
@@ -43,6 +46,9 @@ export function SettingsScreen() {
   const setAudioQuality = useSettingsStore((s) => s.setAudioQuality);
   const downloadOverWifiOnly = useSettingsStore((s) => s.downloadOverWifiOnly);
   const setDownloadOverWifiOnly = useSettingsStore((s) => s.setDownloadOverWifiOnly);
+  const autoDownloadFavorites = useSettingsStore((s) => s.autoDownloadFavorites);
+  const setAutoDownloadFavorites = useSettingsStore((s) => s.setAutoDownloadFavorites);
+  const favorites = useLibraryStore((s) => s.favorites);
   const primaryHue = useSettingsStore((s) => s.primaryHue);
   const setPrimaryHue = useSettingsStore((s) => s.setPrimaryHue);
   const downloadedTracks = useLibraryStore((s) => s.downloadedTracks);
@@ -53,11 +59,39 @@ export function SettingsScreen() {
   const refreshRecommendations = useHomeStore((s) => s.refresh);
 
   const [totalSize, setTotalSize] = useState(0);
+  const [freeSpace, setFreeSpace] = useState<number | null>(null);
   const [isCheckingForUpdate, setIsCheckingForUpdate] = useState(false);
 
   useEffect(() => {
     getTotalDownloadsSize().then(setTotalSize);
+    FileSystem.getFreeDiskStorageAsync().then(setFreeSpace, () => setFreeSpace(null));
   }, [downloadedTracks.length]);
+
+  const handleAutoDownload = (enabled: boolean) => {
+    if (!enabled) {
+      setAutoDownloadFavorites(false);
+      return;
+    }
+
+    const missing = favorites.filter(
+      (track) => !downloadedTracks.some((d) => d.id === track.id)
+    ).length;
+    if (missing === 0) {
+      setAutoDownloadFavorites(true);
+      return;
+    }
+
+    Alert.alert(
+      'Download Liked Songs',
+      `${missing} liked ${missing === 1 ? 'song is' : 'songs are'} not on this device yet and will be downloaded now${
+        downloadOverWifiOnly ? ' (on Wi-Fi only)' : ''
+      }. Songs you like from now on are downloaded automatically.`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Download', onPress: () => setAutoDownloadFavorites(true) },
+      ]
+    );
+  };
 
   const handleAudioQuality = () => {
     const options: { label: string; value: AudioQuality }[] = [
@@ -239,7 +273,7 @@ export function SettingsScreen() {
             <ChevronRight size={16} color={theme.textTertiary} />
           </TouchableOpacity>
 
-          <View style={[styles.row, { borderBottomWidth: 0 }]}>
+          <View style={[styles.row, { borderBottomColor: theme.border }]}>
             <Wifi size={20} color={theme.primary} />
             <Text style={[typography.body, { color: theme.text, flex: 1 }]}>
               Download over Wi-Fi only
@@ -249,6 +283,19 @@ export function SettingsScreen() {
               onValueChange={setDownloadOverWifiOnly}
               trackColor={{ false: theme.border, true: theme.primary + '60' }}
               thumbColor={downloadOverWifiOnly ? theme.primary : theme.textTertiary}
+            />
+          </View>
+
+          <View style={[styles.row, { borderBottomWidth: 0 }]}>
+            <Heart size={20} color={theme.primary} />
+            <Text style={[typography.body, { color: theme.text, flex: 1 }]}>
+              Auto-download liked songs
+            </Text>
+            <Switch
+              value={autoDownloadFavorites}
+              onValueChange={handleAutoDownload}
+              trackColor={{ false: theme.border, true: theme.primary + '60' }}
+              thumbColor={autoDownloadFavorites ? theme.primary : theme.textTertiary}
             />
           </View>
         </View>
@@ -280,6 +327,18 @@ export function SettingsScreen() {
               {downloadedTracks.length} ({formatSize(totalSize)})
             </Text>
           </View>
+
+          {freeSpace != null && (
+            <View style={[styles.row, { borderBottomColor: theme.border }]}>
+              <Smartphone size={20} color={theme.primary} />
+              <Text style={[typography.body, { color: theme.text, flex: 1 }]}>
+                Free Space on Device
+              </Text>
+              <Text style={[typography.body, { color: theme.textSecondary }]}>
+                {formatSize(freeSpace)}
+              </Text>
+            </View>
+          )}
 
           <TouchableOpacity
             style={[styles.row, { borderBottomColor: theme.border }]}
@@ -424,7 +483,7 @@ export function SettingsScreen() {
           ]}
         >
           MusicPlayer — Personal YouTube music player.{'\n'}
-          Audio streams provided by Piped & Invidious APIs.
+          Music is streamed directly from YouTube.
         </Text>
       </ScrollView>
     </SafeAreaView>

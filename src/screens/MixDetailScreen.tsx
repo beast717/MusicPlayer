@@ -9,7 +9,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { ArrowLeft, Play, Shuffle, ListPlus } from 'lucide-react-native';
-import { TrackItem, AddToPlaylistModal } from '../components';
+import { TrackItem, TrackOptionsModal } from '../components';
 import { useTheme } from '../theme';
 import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
@@ -23,8 +23,7 @@ export function MixDetailScreen({ route, navigation }: MixDetailScreenProps) {
   const playQueue = usePlayerStore((s) => s.playQueue);
   const shufflePlay = usePlayerStore((s) => s.shufflePlay);
   const currentTrack = usePlayerStore((s) => s.currentTrack);
-  const createPlaylist = useLibraryStore((s) => s.createPlaylist);
-  const addToPlaylist = useLibraryStore((s) => s.addToPlaylist);
+  const importPlaylist = useLibraryStore((s) => s.importPlaylist);
 
   const [playlistTrack, setPlaylistTrack] = useState<Track | null>(null);
 
@@ -55,8 +54,7 @@ export function MixDetailScreen({ route, navigation }: MixDetailScreenProps) {
   }
 
   const handleSave = () => {
-    const playlist = createPlaylist(mix.title);
-    mix.tracks.forEach((track) => addToPlaylist(playlist.id, track));
+    importPlaylist(mix.title, mix.tracks, mix.coverUrl);
     Alert.alert('Saved', `"${mix.title}" was added to your playlists.`);
   };
 
@@ -151,7 +149,7 @@ export function MixDetailScreen({ route, navigation }: MixDetailScreenProps) {
         showsVerticalScrollIndicator={false}
       />
 
-      <AddToPlaylistModal
+      <TrackOptionsModal
         visible={!!playlistTrack}
         track={playlistTrack}
         onClose={() => setPlaylistTrack(null)}

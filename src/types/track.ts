@@ -4,6 +4,8 @@ export interface Track {
   artist: string;
   duration: number; // seconds
   thumbnailUrl: string;
+  /** YouTube Music channel ID of the main artist, when the source provided it. */
+  artistId?: string;
   localFilePath?: string; // set if downloaded
   localThumbnailPath?: string;
   addedAt?: number; // timestamp

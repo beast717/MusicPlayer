@@ -10,6 +10,7 @@ const track = (id: string, artist = `Artist ${id}`): Track => ({
 
 const mockState = {
   stats: {} as Record<string, any>,
+  notInterested: {} as Record<string, number>,
   recentlyPlayed: [] as Track[],
   favorites: [] as Track[],
   radio: (async () => []) as (id: string, options?: { forceRefresh?: boolean }) => Promise<Track[]>,
@@ -19,7 +20,9 @@ jest.mock('../../services/youtubeMusic', () => ({
   getRadioTracks: (id: string, options?: { forceRefresh?: boolean }) => mockState.radio(id, options),
 }));
 jest.mock('../historyStore', () => ({
-  useHistoryStore: { getState: () => ({ stats: mockState.stats }) },
+  useHistoryStore: {
+    getState: () => ({ stats: mockState.stats, notInterested: mockState.notInterested }),
+  },
 }));
 jest.mock('../libraryStore', () => ({
   useLibraryStore: { getState: () => ({ favorites: mockState.favorites }) },
@@ -50,6 +53,7 @@ beforeEach(() => {
     lastUpdated: null,
   });
   mockState.stats = {};
+  mockState.notInterested = {};
   mockState.recentlyPlayed = [];
   mockState.favorites = [];
   mockState.radio = async (id) => radioFor(id);
@@ -152,6 +156,36 @@ it('passes forceRefresh through on pull-to-refresh', async () => {
   await state().refresh({ force: true });
 
   expect(radio).toHaveBeenCalledWith('a', { forceRefresh: true });
+});
+
+it('leaves "not interested" songs out of every section', async () => {
+  mockState.stats = { a: played(track('a', 'Adele'), 9), b: played(track('b', 'Burna Boy'), 5) };
+  mockState.notInterested = { 'a-r1': Date.now(), b: Date.now() };
+
+  await state().refresh();
+
+  expect(state().mixes.map((m) => m.id)).toEqual(['mix-a']);
+  expect(state().mixes[0].tracks.map((t) => t.id)).toEqual(['a', 'a-r2']);
+  expect(state().quickPicks.map((t) => t.id)).toEqual(['a-r2']);
+});
+
+it('removeTrack takes a song off the screen without a reload', async () => {
+  mockState.stats = {
+    a: played(track('a', 'Adele'), 9),
+    b: played(track('b', 'Burna Boy'), 5),
+    recent: played(track('recent', 'Zara Larsson'), 1, 1),
+  };
+  await state().refresh();
+
+  state().removeTrack('a-r1');
+  expect(state().quickPicks.map((t) => t.id)).not.toContain('a-r1');
+  expect(state().getMix('mix-a')?.tracks.map((t) => t.id)).toEqual(['a', 'a-r2']);
+
+  // A mix or "because you listened" row can't outlive the song it is built on
+  state().removeTrack('b');
+  state().removeTrack('recent');
+  expect(state().getMix('mix-b')).toBeUndefined();
+  expect(state().becauseYouListened).toBeNull();
 });
 
 it('an older refresh does not overwrite a newer one', async () => {

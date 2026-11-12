@@ -8,7 +8,10 @@ import {
   buildQuickPicks,
   buildMix,
   buildBecauseYouListened,
+  createTaste,
+  isDisliked,
   HistoryStats,
+  Taste,
 } from '../recommendations';
 import { Track } from '../../types';
 
@@ -23,7 +26,16 @@ const track = (id: string, artist = `Artist ${id}`): Track => ({
   thumbnailUrl: `https://img/${id}`,
 });
 
+const NO_TASTE = createTaste({});
+
+/** A taste with only a listening history. */
 function history(
+  entries: [Track, { plays?: number; skips?: number; daysAgo?: number }][]
+): Taste {
+  return createTaste(historyStats(entries));
+}
+
+function historyStats(
   entries: [Track, { plays?: number; skips?: number; daysAgo?: number }][]
 ): HistoryStats {
   const stats: HistoryStats = {};
@@ -56,16 +68,39 @@ describe('primaryArtist', () => {
 describe('scoreTrack', () => {
   it('halves the weight of plays every 30 days and penalises skips', () => {
     const [fresh, old, skipped] = Object.values(
-      history([
+      historyStats([
         [track('fresh'), { plays: 4 }],
         [track('old'), { plays: 4, daysAgo: 30 }],
-        [track('skipped'), { plays: 4, skips: 4 }],
+        [track('skipped'), { plays: 4, skips: 2 }],
       ])
     );
 
     expect(scoreTrack(fresh, NOW)).toBeCloseTo(4);
     expect(scoreTrack(old, NOW)).toBeCloseTo(2);
     expect(scoreTrack(skipped, NOW)).toBeCloseTo(2);
+  });
+
+  it('counts a like as three extra plays', () => {
+    const [liked] = Object.values(historyStats([[track('liked'), { plays: 1, daysAgo: 30 }]]));
+
+    expect(scoreTrack(liked, NOW, true)).toBeCloseTo(2);
+  });
+});
+
+describe('isDisliked', () => {
+  const stats = historyStats([
+    [track('skipped'), { plays: 0, skips: 2 }],
+    [track('likedButSkipped'), { plays: 0, skips: 5 }],
+    [track('played'), { plays: 3, skips: 2 }],
+  ]);
+  const taste = createTaste(stats, [track('likedButSkipped')], { blocked: NOW });
+
+  it('covers "not interested" and repeated skips, but a like outweighs skips', () => {
+    expect(isDisliked(taste, 'blocked')).toBe(true);
+    expect(isDisliked(taste, 'skipped')).toBe(true);
+    expect(isDisliked(taste, 'likedButSkipped')).toBe(false);
+    expect(isDisliked(taste, 'played')).toBe(false);
+    expect(isDisliked(taste, 'unknown')).toBe(false);
   });
 });
 
@@ -79,6 +114,20 @@ describe('getListenAgain', () => {
     ]);
 
     expect(getListenAgain(stats, NOW).map((t) => t.id)).toEqual(['c', 'b', 'a']);
+  });
+
+  it('moves liked songs up and drops "not interested" ones', () => {
+    const taste = createTaste(
+      historyStats([
+        [track('most'), { plays: 5 }],
+        [track('liked'), { plays: 3 }],
+        [track('blocked'), { plays: 9 }],
+      ]),
+      [track('liked')],
+      { blocked: NOW }
+    );
+
+    expect(getListenAgain(taste, NOW).map((t) => t.id)).toEqual(['liked', 'most']);
   });
 });
 
@@ -118,6 +167,28 @@ describe('pickSeeds', () => {
 
     expect(pickSeeds(stats, [track('x')], NOW, 5)).toEqual([]);
   });
+
+  it('seeds from recently liked songs that have not been played yet', () => {
+    const likedToday = { ...track('new', 'Tems'), addedAt: NOW };
+    const likedLongAgo = { ...track('old', 'Wizkid'), addedAt: NOW - 120 * DAY };
+    const taste = createTaste(
+      historyStats([[track('played', 'Adele'), { plays: 2 }]]),
+      [likedToday, likedLongAgo]
+    );
+
+    // like today = 3, two plays = 2, like 120 days ago = 3/16
+    expect(pickSeeds(taste, [], NOW, 5).map((t) => t.id)).toEqual(['new', 'played', 'old']);
+  });
+
+  it('never seeds from a "not interested" track, even from the fallback', () => {
+    const taste = createTaste(
+      historyStats([[track('blocked', 'Adele'), { plays: 9 }]]),
+      [],
+      { blocked: NOW }
+    );
+
+    expect(pickSeeds(taste, [track('blocked', 'Adele')], NOW, 5)).toEqual([]);
+  });
 });
 
 describe('buildQuickPicks', () => {
@@ -137,7 +208,7 @@ describe('buildQuickPicks', () => {
 
   it('respects the limit', () => {
     const radio = Array.from({ length: 50 }, (_, i) => track(`r${i}`));
-    expect(buildQuickPicks([], [radio], {}, 20)).toHaveLength(20);
+    expect(buildQuickPicks([], [radio], NO_TASTE, 20)).toHaveLength(20);
   });
 });
 
@@ -146,7 +217,7 @@ describe('buildMix', () => {
     const seed = track('seed', 'Daddy Yankee & Snow');
     const radio = [seed, track('r1', 'Shakira'), track('r2', 'Daddy Yankee'), track('r3', 'KAROL G')];
 
-    const mix = buildMix(seed, radio, {});
+    const mix = buildMix(seed, radio, NO_TASTE);
 
     expect(mix).toMatchObject({
       id: 'mix-seed',
@@ -169,12 +240,12 @@ describe('because you listened to', () => {
     ]);
 
     expect(pickRecentSeed(stats, [track('seed', 'Adele')])?.id).toBe('recent');
-    expect(pickRecentSeed({}, [])).toBeNull();
+    expect(pickRecentSeed(NO_TASTE, [])).toBeNull();
   });
 
   it('lists the radio without the seed itself', () => {
     const seed = track('seed');
-    const section = buildBecauseYouListened(seed, [seed, track('r1'), track('r2')], {});
+    const section = buildBecauseYouListened(seed, [seed, track('r1'), track('r2')], NO_TASTE);
 
     expect(section.seed).toBe(seed);
     expect(section.tracks.map((t) => t.id)).toEqual(['r1', 'r2']);

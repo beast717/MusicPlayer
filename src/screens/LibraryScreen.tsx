@@ -13,6 +13,7 @@ import {
   Download,
   ListMusic,
   Plus,
+  Link,
   ChevronRight,
   Music,
 } from 'lucide-react-native';
@@ -20,7 +21,8 @@ import { PlaylistCard, TextInputModal } from '../components';
 import { useTheme } from '../theme';
 import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
-import { useLibraryStore, usePlayerStore } from '../stores';
+import { useLibraryStore } from '../stores';
+import { parseCollectionLink } from '../services/musicCatalog';
 import { useNavigation } from '@react-navigation/native';
 
 export function LibraryScreen() {
@@ -33,6 +35,7 @@ export function LibraryScreen() {
   const deletePlaylist = useLibraryStore((s) => s.deletePlaylist);
 
   const [showCreateInput, setShowCreateInput] = useState(false);
+  const [showImportInput, setShowImportInput] = useState(false);
 
   const handleCreatePlaylist = useCallback(() => {
     setShowCreateInput(true);
@@ -44,6 +47,23 @@ export function LibraryScreen() {
       setShowCreateInput(false);
     },
     [createPlaylist]
+  );
+
+  const handleImportSubmit = useCallback(
+    (text: string) => {
+      const link = parseCollectionLink(text);
+      if (!link) {
+        Alert.alert(
+          'Link Not Recognised',
+          'Paste a YouTube or YouTube Music playlist or album link, for example youtube.com/playlist?list=…'
+        );
+        return;
+      }
+      setShowImportInput(false);
+      // The playlist opens as a preview; "Save to library" there makes it a playlist
+      navigation.navigate('Collection', link);
+    },
+    [navigation]
   );
 
   const handleDeletePlaylist = useCallback(
@@ -144,20 +164,38 @@ export function LibraryScreen() {
               <Text style={[typography.title2, { color: theme.text }]}>
                 Playlists
               </Text>
-              <TouchableOpacity
-                onPress={handleCreatePlaylist}
-                style={[styles.addButton, { backgroundColor: theme.primary + '15' }]}
-              >
-                <Plus size={18} color={theme.primary} />
-                <Text
-                  style={[
-                    typography.subheadline,
-                    { color: theme.primary, fontWeight: '600' },
-                  ]}
+              <View style={styles.playlistActions}>
+                <TouchableOpacity
+                  onPress={() => setShowImportInput(true)}
+                  style={[styles.addButton, { backgroundColor: theme.primary + '15' }]}
+                  accessibilityRole="button"
+                  accessibilityLabel="Import a YouTube playlist"
                 >
-                  New
-                </Text>
-              </TouchableOpacity>
+                  <Link size={16} color={theme.primary} />
+                  <Text
+                    style={[
+                      typography.subheadline,
+                      { color: theme.primary, fontWeight: '600' },
+                    ]}
+                  >
+                    Import
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={handleCreatePlaylist}
+                  style={[styles.addButton, { backgroundColor: theme.primary + '15' }]}
+                >
+                  <Plus size={18} color={theme.primary} />
+                  <Text
+                    style={[
+                      typography.subheadline,
+                      { color: theme.primary, fontWeight: '600' },
+                    ]}
+                  >
+                    New
+                  </Text>
+                </TouchableOpacity>
+              </View>
             </View>
           </>
         }
@@ -236,6 +274,16 @@ export function LibraryScreen() {
         onSubmit={handleCreateSubmit}
         onCancel={() => setShowCreateInput(false)}
       />
+
+      <TextInputModal
+        visible={showImportInput}
+        title="Import Playlist"
+        message="Paste a YouTube or YouTube Music playlist or album link"
+        placeholder="https://music.youtube.com/playlist?list=…"
+        submitLabel="Open"
+        onSubmit={handleImportSubmit}
+        onCancel={() => setShowImportInput(false)}
+      />
     </SafeAreaView>
   );
 }
@@ -271,6 +319,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.xxl,
     paddingBottom: spacing.md,
+  },
+  playlistActions: {
+    flexDirection: 'row',
+    gap: spacing.sm,
   },
   addButton: {
     flexDirection: 'row',

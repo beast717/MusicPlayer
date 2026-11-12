@@ -15,7 +15,7 @@ import {
   Trash2,
   Edit3,
 } from 'lucide-react-native';
-import { TrackItem, AddToPlaylistModal, TextInputModal } from '../components';
+import { TrackItem, TrackOptionsModal, TextInputModal } from '../components';
 import { useTheme } from '../theme';
 import { typography } from '../theme/typography';
 import { spacing, borderRadius, MINI_PLAYER_HEIGHT } from '../theme/spacing';
@@ -209,7 +209,7 @@ export function PlaylistDetailScreen({
         showsVerticalScrollIndicator={false}
       />
 
-      <AddToPlaylistModal
+      <TrackOptionsModal
         visible={!!playlistTrack}
         track={playlistTrack}
         onClose={() => setPlaylistTrack(null)}

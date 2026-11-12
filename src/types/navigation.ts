@@ -10,24 +10,32 @@ export type TabParamList = {
   SettingsTab: undefined;
 };
 
+// Artist, album and YouTube playlist pages. Registered in every tab's stack
+// so they open on top of whatever screen linked to them.
+export type CatalogStackParamList = {
+  /** Without an `artistId` the artist is looked up by name. */
+  Artist: { artistId?: string; name: string };
+  Collection: { kind: 'album' | 'playlist'; id: string; title?: string };
+};
+
 // Stack navigators inside each tab
-export type HomeStackParamList = {
+export type HomeStackParamList = CatalogStackParamList & {
   Home: undefined;
   MixDetail: { mixId: string };
 };
 
-export type SearchStackParamList = {
+export type SearchStackParamList = CatalogStackParamList & {
   Search: undefined;
 };
 
-export type LibraryStackParamList = {
+export type LibraryStackParamList = CatalogStackParamList & {
   Library: undefined;
   PlaylistDetail: { playlistId: string };
   Downloads: undefined;
   Favorites: undefined;
 };
 
-export type SettingsStackParamList = {
+export type SettingsStackParamList = CatalogStackParamList & {
   Settings: undefined;
 };
 
@@ -48,6 +56,13 @@ export type HomeScreenProps = CompositeScreenProps<
 export type MixDetailScreenProps = NativeStackScreenProps<
   HomeStackParamList,
   'MixDetail'
+>;
+
+export type ArtistScreenProps = NativeStackScreenProps<CatalogStackParamList, 'Artist'>;
+
+export type CollectionScreenProps = NativeStackScreenProps<
+  CatalogStackParamList,
+  'Collection'
 >;
 
 export type SearchScreenProps = CompositeScreenProps<
