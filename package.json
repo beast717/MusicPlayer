@@ -11,7 +11,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p webview-extractor",
     "build:extractor": "node scripts/build-webview-extractor.mjs",
     "postinstall": "patch-package --error-on-fail && node scripts/build-webview-extractor.mjs",
-    "ota": "eas update --channel production --platform ios --message"
+    "ota": "npx eas-cli update --channel production --environment production --platform ios --message"
   },
   "dependencies": {
     "@react-native-community/netinfo": "11.5.2",
